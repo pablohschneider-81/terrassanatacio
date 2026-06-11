@@ -22,6 +22,7 @@
     --gold: #f0c040;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; }
   #app { width: 100%; max-width: 480px; min-height: 100vh; display: flex; flex-direction: column; position: relative; padding-bottom: 70px; background: var(--bg); }
 
@@ -229,6 +230,186 @@
 
 <script>
 // ============================================================
+// SUPABASE CONFIG
+// ============================================================
+const SUPABASE_URL = 'https://skblkxwaxnefycgrqeyt.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzQ5NjAwMDAwLCJleHAiOjE5MDczNjY0MDB9.XY4UcdLmnu-NTgXXO4hw8TcJng4QQ2IfO-LToOvpO6g';
+
+async function sbFetch(path, options) {
+  const url = SUPABASE_URL + '/rest/v1/' + path;
+  const headers = {
+    'apikey': SUPABASE_KEY,
+    'Authorization': 'Bearer ' + SUPABASE_KEY,
+    'Content-Type': 'application/json',
+    'Prefer': options && options.prefer ? options.prefer : 'return=representation'
+  };
+  const res = await fetch(url, { ...options, headers: { ...headers, ...(options && options.headers || {}) } });
+  if (!res.ok) { const err = await res.text(); console.error('SB error', path, err); return null; }
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
+// ── Athlete cache ──────────────────────────────────────────
+let _athleteCache = null;
+async function dbGetAthletes() {
+  if (_athleteCache) return _athleteCache;
+  const rows = await sbFetch('athletes?select=id,name&active=eq.true&order=name');
+  _athleteCache = rows || [];
+  return _athleteCache;
+}
+async function dbAthleteId(name) {
+  const athletes = await dbGetAthletes();
+  const found = athletes.find(a => a.name === name);
+  return found ? found.id : null;
+}
+async function dbAddAthlete(name) {
+  const res = await sbFetch('athletes', { method:'POST', body: JSON.stringify({ name }) });
+  _athleteCache = null;
+  return res;
+}
+async function dbDeleteAthlete(name) {
+  await sbFetch('athletes?name=eq.' + encodeURIComponent(name), { method:'DELETE', prefer: 'return=minimal' });
+  _athleteCache = null;
+}
+
+// ── Sessions ───────────────────────────────────────────────
+let _sessionCache = {};
+async function dbGetSession(date) {
+  if (_sessionCache[date] !== undefined) return _sessionCache[date];
+  const rows = await sbFetch('sessions?date=eq.' + date + '&select=*');
+  if (!rows || rows.length === 0) { _sessionCache[date] = null; return null; }
+  // Reconstruct am/pm format
+  const result = { am: null, pm: null };
+  rows.forEach(r => {
+    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, alphaPhase: r.alpha_phase, _id: r.id };
+    result[r.slot] = sess;
+  });
+  _sessionCache[date] = result;
+  return result;
+}
+async function dbSaveSession(date, slot, sessObj) {
+  const body = {
+    date, slot,
+    title: sessObj.title || 'Sin título',
+    phase: sessObj.phase || 'Ligero',
+    target_rpe: sessObj.targetRPE || 6,
+    alpha_phase: sessObj.alphaPhase || null,
+    content: {
+      warmUp: sessObj.warmUp || '', preSet: sessObj.preSet || '',
+      mainSet: sessObj.mainSet || '', coolDown: sessObj.coolDown || '',
+      pullText: sessObj.pullText || '', pushText: sessObj.pushText || '', lowerText: sessObj.lowerText || ''
+    }
+  };
+  await sbFetch('sessions?date=eq.' + date + '&slot=eq.' + slot, {
+    method: 'DELETE', prefer: 'return=minimal'
+  });
+  await sbFetch('sessions', { method: 'POST', body: JSON.stringify(body) });
+  delete _sessionCache[date];
+}
+async function dbGetAllSessions() {
+  const rows = await sbFetch('sessions?select=*&order=date.desc');
+  if (!rows) return [];
+  // Group by date
+  const byDate = {};
+  rows.forEach(r => {
+    if (!byDate[r.date]) byDate[r.date] = { am: null, pm: null };
+    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, alphaPhase: r.alpha_phase };
+    byDate[r.date][r.slot] = sess;
+  });
+  return Object.entries(byDate).map(([date, data]) => ({ date, data })).sort((a,b) => b.date.localeCompare(a.date));
+}
+
+// ── RPE ────────────────────────────────────────────────────
+let _rpeCache = {};
+async function dbGetDayRPE(date) {
+  if (_rpeCache[date]) return _rpeCache[date];
+  const rows = await sbFetch('rpe_entries?date=eq.' + date + '&select=*,athletes(name)');
+  if (!rows) { _rpeCache[date] = {}; return {}; }
+  const result = {};
+  rows.forEach(r => {
+    const name = r.athletes?.name;
+    if (!name) return;
+    if (!result[name]) result[name] = { am: null, pm: null };
+    result[name][r.slot] = { rpe: r.rpe, fatigue: r.fatigue, note: r.note, ts: new Date(r.created_at).getTime() };
+  });
+  _rpeCache[date] = result;
+  return result;
+}
+async function dbSaveRPE(date, slot, athleteName, rpe, fatigue, note) {
+  const athleteId = await dbAthleteId(athleteName);
+  if (!athleteId) return;
+  await sbFetch('rpe_entries?athlete_id=eq.' + athleteId + '&date=eq.' + date + '&slot=eq.' + slot, {
+    method: 'DELETE', prefer: 'return=minimal'
+  });
+  await sbFetch('rpe_entries', {
+    method: 'POST',
+    body: JSON.stringify({ athlete_id: athleteId, date, slot, rpe, fatigue, note: note || '' })
+  });
+  delete _rpeCache[date];
+}
+async function dbGetAthleteHist(name) {
+  const athleteId = await dbAthleteId(name);
+  if (!athleteId) return [];
+  const rows = await sbFetch('rpe_entries?athlete_id=eq.' + athleteId + '&select=date,slot,rpe,fatigue&order=date.asc');
+  return rows || [];
+}
+
+// ── Comments ───────────────────────────────────────────────
+let _commentCache = null;
+async function dbGetComments() {
+  const rows = await sbFetch('comments?select=*,athletes(name)');
+  if (!rows) return {};
+  const result = {};
+  rows.forEach(r => { result[r.date + '_' + r.athletes?.name] = r.text; });
+  _commentCache = result;
+  return result;
+}
+async function dbSaveComment(date, athleteName, text) {
+  const athleteId = await dbAthleteId(athleteName);
+  if (!athleteId) return;
+  await sbFetch('comments?athlete_id=eq.' + athleteId + '&date=eq.' + date, {
+    method: 'DELETE', prefer: 'return=minimal'
+  });
+  if (text.trim()) {
+    await sbFetch('comments', {
+      method: 'POST',
+      body: JSON.stringify({ athlete_id: athleteId, date, text })
+    });
+  }
+  _commentCache = null;
+}
+
+// ── Competitions ───────────────────────────────────────────
+let _compCache = null;
+async function dbGetCompetitions() {
+  if (_compCache) return _compCache;
+  const rows = await sbFetch('competitions?select=*&order=start_date');
+  _compCache = (rows || []).map(r => ({
+    id: r.id, name: r.name, start: r.start_date, end: r.end_date,
+    location: r.location, type: r.type
+  }));
+  return _compCache;
+}
+async function dbAddCompetition(comp) {
+  await sbFetch('competitions', {
+    method: 'POST',
+    body: JSON.stringify({ name: comp.name, start_date: comp.start, end_date: comp.end, location: comp.location || '', type: comp.type || 'Regional' })
+  });
+  _compCache = null;
+}
+async function dbDeleteCompetition(id) {
+  await sbFetch('competitions?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' });
+  _compCache = null;
+}
+
+// ── Loading state ──────────────────────────────────────────
+let _loading = false;
+function showLoading() {
+  const app = document.getElementById('app');
+  if (app) app.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-size:0.9rem;gap:12px"><span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Cargando...</div>';
+}
+
+// ============================================================
 // STATE
 // ============================================================
 const DEFAULT_ATHLETES = [
@@ -270,6 +451,7 @@ let S = {
   sessionRPE: 6,
   sessionPhase: 'Ligero',
   sessionDate: todayStr(),
+  sessionSlot: 'unica', // 'unica' | 'am' | 'pm'
   alphaPhase: null,
   pullText: '',
   pushText: '',
@@ -303,33 +485,66 @@ let S = {
 // ============================================================
 // LOCALSTORAGE HELPERS
 // ============================================================
-function ls_get(k, def) {
-  try { const v = localStorage.getItem(k); return v !== null ? JSON.parse(v) : def; } catch(e) { return def; }
+
+// ============================================================
+// DATA CACHE — populated async before render
+// ============================================================
+const DATA = {
+  athletes: [],
+  sessions: {}, // date -> {am,pm}
+  allSessions: [],
+  rpe: {},      // date -> {athleteName: {am,pm}}
+  comments: {}, // "date_name" -> text
+  competitions: [],
+  athleteHist: {} // name -> [{date,slot,rpe,fatigue}]
+};
+
+// Sync accessors (read from cache)
+function getAthletes() { return DATA.athletes.map(a => a.name); }
+function getSession(date) { return DATA.sessions[date] || null; }
+function getAllSessions() { return DATA.allSessions; }
+function getDayRPE(date) { return DATA.rpe[date] || {}; }
+function getComments() { return DATA.comments; }
+function getCompetitions() { return DATA.competitions; }
+
+async function loadData() {
+  // Load athletes
+  const athletes = await dbGetAthletes();
+  DATA.athletes = athletes;
+
+  // Load all sessions
+  DATA.allSessions = await dbGetAllSessions();
+  DATA.sessions = {};
+  DATA.allSessions.forEach(s => { DATA.sessions[s.date] = s.data; });
+
+  // Load RPE for last 30 days
+  const today = new Date();
+  const promises = [];
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const ds = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    promises.push(dbGetDayRPE(ds).then(rpe => { DATA.rpe[ds] = rpe; }));
+  }
+  await Promise.all(promises);
+
+  // Load comments
+  DATA.comments = await dbGetComments();
+
+  // Load competitions
+  DATA.competitions = await dbGetCompetitions();
+
+  // Load hist for current athlete if logged in
+  if (S.athleteName) {
+    DATA.athleteHist[S.athleteName] = await dbGetAthleteHist(S.athleteName);
+  }
 }
-function ls_set(k, v) {
-  try { localStorage.setItem(k, JSON.stringify(v)); } catch(e) {}
+
+async function renderAsync() {
+  showLoading();
+  await loadData();
+  render();
 }
-function getAthletes() {
-  const a = ls_get('tn:athletes', null);
-  if (!a) { ls_set('tn:athletes', DEFAULT_ATHLETES); return DEFAULT_ATHLETES; }
-  return a;
-}
-function getSession(dateStr) { return ls_get('tn:session:' + dateStr, null); }
-function getAllSessions() {
-  const sessions = [];
-  try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith('tn:session:')) {
-        try { sessions.push({ date: k.replace('tn:session:',''), data: JSON.parse(localStorage.getItem(k)) }); } catch(e) {}
-      }
-    }
-  } catch(e) {}
-  return sessions.sort((a,b) => b.date.localeCompare(a.date));
-}
-function getDayRPE(dateStr) { return ls_get('tn:rpe:' + dateStr, {}); }
-function getComments() { return ls_get('tn:comments', {}); }
-function getCompetitions() { return ls_get('tn:competitions', []); }
+
 function todayStr() {
   const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
@@ -365,6 +580,45 @@ function totalMeters(session) {
   return parseMeters(session.warmUp) + parseMeters(session.preSet) + parseMeters(session.mainSet) + parseMeters(session.coolDown);
 }
 
+
+// ============================================================
+// DOUBLE SESSION HELPERS
+// ============================================================
+// Storage format v2: tn:session:DATE = { am: sessObj|null, pm: sessObj|null }
+// Legacy format: tn:session:DATE = sessObj (treated as single/am)
+function normDay(raw) {
+  if (!raw) return null;
+  if (raw.am !== undefined || raw.pm !== undefined) return { am: raw.am || null, pm: raw.pm || null };
+  return { am: raw, pm: null }; // legacy single session
+}
+function daySlots(raw) {
+  const n = normDay(raw);
+  if (!n) return [];
+  const out = [];
+  if (n.am) out.push({ slot: 'am', label: n.pm ? '☀️ Mañana' : '', sess: n.am });
+  if (n.pm) out.push({ slot: 'pm', label: '🌙 Tarde', sess: n.pm });
+  return out;
+}
+function isDoubleDay(raw) {
+  const n = normDay(raw);
+  return !!(n && n.am && n.pm);
+}
+// RPE format v2 (double days): entry = { am: {rpe,fatigue,note}, pm: {...} }
+// Legacy: entry = { rpe, fatigue, note }
+function normRPE(entry) {
+  if (!entry) return null;
+  if (entry.am !== undefined || entry.pm !== undefined) return { am: entry.am || null, pm: entry.pm || null };
+  return { am: entry, pm: null };
+}
+function rpeSubmissions(entry) {
+  const n = normRPE(entry);
+  if (!n) return [];
+  const out = [];
+  if (n.am) out.push({ slot: 'am', data: n.am });
+  if (n.pm) out.push({ slot: 'pm', data: n.pm });
+  return out;
+}
+
 // ============================================================
 // RPE COLOR
 // ============================================================
@@ -395,7 +649,7 @@ function renderTextWithNotes(text) {
 // ============================================================
 function calcACWR(athleteName) {
   try {
-    const hist = ls_get('tn:hist:' + athleteName, []);
+  const hist = DATA.athleteHist[athleteName] || [];
     if (hist.length < 3) return null;
     const today = new Date();
     let acute = 0, acuteCount = 0;
@@ -684,6 +938,24 @@ function buildCoachSession() {
   dateIn.oninput = e => { S.sessionDate = e.target.value; };
   d.appendChild(dateIn);
 
+  // Turno selector
+  const lturno = document.createElement('label'); lturno.className = 'field-label'; lturno.textContent = 'Turno';
+  d.appendChild(lturno);
+  const turnoWrap = document.createElement('div'); turnoWrap.className = 'pack-toggle';
+  [['unica','Única'],['am','☀️ Mañana'],['pm','🌙 Tarde']].forEach(function(pair) {
+    const btn = document.createElement('button');
+    btn.className = 'pack-btn' + (S.sessionSlot === pair[0] ? ' active' : '');
+    btn.textContent = pair[1];
+    btn.onclick = function() {
+      S.sessionSlot = pair[0];
+      turnoWrap.querySelectorAll('.pack-btn').forEach(function(b, i) {
+        b.classList.toggle('active', ['unica','am','pm'][i] === pair[0]);
+      });
+    };
+    turnoWrap.appendChild(btn);
+  });
+  d.appendChild(turnoWrap);
+
   if (S.sessionPhase === 'Fuerza') {
     // AlphaPattern
     const la = document.createElement('label'); la.className = 'field-label'; la.textContent = 'AlphaPattern Fase';
@@ -784,12 +1056,17 @@ function buildCoachSession() {
       coolDown: S.coolDown
     };
     const baseDate = S.sessionDate || todayStr();
+    const publishPromises = [];
     for (let i = 0; i < S.packDays; i++) {
       const d2 = new Date(baseDate + 'T12:00:00');
       d2.setDate(d2.getDate() + i);
       const ds = d2.getFullYear()+'-'+String(d2.getMonth()+1).padStart(2,'0')+'-'+String(d2.getDate()).padStart(2,'0');
-      ls_set('tn:session:' + ds, session);
+      const slots = S.sessionSlot === 'unica' ? ['am'] : [S.sessionSlot];
+      slots.forEach(function(sl) {
+        publishPromises.push(dbSaveSession(ds, sl, session));
+      });
     }
+    Promise.all(publishPromises).then(function() { renderAsync(); });
     this.textContent = '✓ Publicado';
     this.style.background = '#27ae60';
     setTimeout(() => { this.textContent = 'Publicar'; this.style.background = ''; }, 2000);
@@ -827,8 +1104,12 @@ function buildCoachRPE() {
 
   // Today session info
   const sc = document.createElement('div'); sc.className = 'card'; sc.style.marginBottom = '12px';
-  if (session) {
-    sc.innerHTML = `<div class="card-title">${session.title}</div><div class="card-sub">RPE objetivo: <strong>${session.targetRPE}</strong> · Fase: <strong>${session.phase}</strong></div>`;
+  const todaySlots = daySlots(session);
+  if (todaySlots.length > 0) {
+    sc.innerHTML = todaySlots.map(function(s) {
+      return '<div class="card-title">' + (s.label ? s.label + ' — ' : '') + s.sess.title + '</div>'
+        + '<div class="card-sub">RPE objetivo: <strong>' + s.sess.targetRPE + '</strong> · Fase: <strong>' + s.sess.phase + '</strong></div>';
+    }).join('<div style="height:8px"></div>');
   } else {
     sc.innerHTML = '<div class="card-sub">Sin sesión publicada para hoy</div>';
   }
@@ -837,9 +1118,14 @@ function buildCoachRPE() {
   // Summary stats
   const responses = athletes.filter(a => dayRPE[a]);
   if (responses.length > 0) {
-    const avgRPE = (responses.reduce((s,a) => s + (dayRPE[a].rpe||0), 0) / responses.length).toFixed(1);
+    let sum = 0, count = 0;
+    responses.forEach(function(a) {
+      rpeSubmissions(dayRPE[a]).forEach(function(sub) { sum += sub.data.rpe || 0; count++; });
+    });
+    const avgRPE = count > 0 ? (sum / count).toFixed(1) : '—';
+    const targetLbl = todaySlots.length > 0 ? todaySlots.map(function(s){return s.sess.targetRPE;}).join(' / ') : '—';
     const sr = document.createElement('div'); sr.className = 'summary-row';
-    [{val:avgRPE,lbl:'RPE Medio'},{val:session?.targetRPE||'—',lbl:'RPE Objetivo'},{val:responses.length+'/'+athletes.length,lbl:'Respuestas'}].forEach(item => {
+    [{val:avgRPE,lbl:'RPE Medio'},{val:targetLbl,lbl:'RPE Objetivo'},{val:responses.length+'/'+athletes.length,lbl:'Respuestas'}].forEach(item => {
       const box = document.createElement('div'); box.className = 'summary-box';
       box.innerHTML = `<div class="summary-val">${item.val}</div><div class="summary-lbl">${item.lbl}</div>`;
       sr.appendChild(box);
@@ -864,13 +1150,24 @@ function buildCoachRPE() {
       ? '<span style="font-size:0.72rem;font-weight:700;color:' + acwrInfo.color + '" title="ACWR ' + acwr + '">' + acwrInfo.icon + ' ' + acwr + '</span>'
       : '<span style="color:var(--text2);font-size:0.72rem">—</span>';
     if (entry) {
-      const delta = entry.rpe - (session?.targetRPE || entry.rpe);
-      const fat = FATIGUE.find(f => f.v === entry.fatigue) || FATIGUE[0];
+      const subs = rpeSubmissions(entry);
+      const circles = subs.map(function(sub) {
+        return '<div class="rpe-circle" style="background:' + rpeColor(sub.data.rpe) + ';display:inline-flex;margin-right:4px;width:28px;height:28px;font-size:0.78rem" title="' + sub.slot + '">' + sub.data.rpe + '</div>';
+      }).join('');
+      const lastSub = subs[subs.length - 1].data;
+      const fat = FATIGUE.find(f => f.v === lastSub.fatigue) || FATIGUE[0];
+      const slotMap = normDay(session) || {};
+      let deltaSum = 0, deltaCount = 0;
+      subs.forEach(function(sub) {
+        const target = slotMap[sub.slot] ? slotMap[sub.slot].targetRPE : null;
+        if (target) { deltaSum += sub.data.rpe - target; deltaCount++; }
+      });
+      const delta = deltaCount > 0 ? Math.round(deltaSum / deltaCount) : 0;
       const deltaStr = delta > 0 ? '+'+delta : delta < 0 ? ''+delta : '=';
       const deltaClass = delta > 0 ? 'plus' : delta < 0 ? 'minus' : '';
       tr.innerHTML = `
         <td>${nameShort}</td>
-        <td><div class="rpe-circle" style="background:${rpeColor(entry.rpe)}">${entry.rpe}</div></td>
+        <td>${circles}</td>
         <td><span class="fatigue-label" style="background:${fat.color}22;color:${fat.color}">${fat.label}</span></td>
         <td><span class="delta ${deltaClass}">${deltaStr}</span></td>
         <td>${acwrCell}</td>
@@ -905,16 +1202,21 @@ function buildCoachRPE() {
     allSessions.forEach(s => {
       const dayRPEHist = getDayRPE(s.date);
       const pastResponses = athletes.filter(a => dayRPEHist[a]);
-      const pastAvg = pastResponses.length > 0
-        ? (pastResponses.reduce((sum,a) => sum + (dayRPEHist[a].rpe||0), 0) / pastResponses.length).toFixed(1)
-        : '—';
+      let pastSum = 0, pastCount = 0;
+      pastResponses.forEach(function(a) {
+        rpeSubmissions(dayRPEHist[a]).forEach(function(sub) { pastSum += sub.data.rpe || 0; pastCount++; });
+      });
+      const pastAvg = pastCount > 0 ? (pastSum / pastCount).toFixed(1) : '—';
 
       const wrapper = document.createElement('div'); wrapper.className = 'hist-date-section';
 
       const toggle = document.createElement('div'); toggle.className = 'hist-date-toggle';
       const toggleInner = document.createElement('div'); toggleInner.style.cssText = 'display:flex;align-items:center;width:100%;gap:8px';
       const toggleLeft = document.createElement('div'); toggleLeft.style.flex = '1';
-      toggleLeft.innerHTML = '<div style="font-weight:600;font-size:0.88rem">' + formatDateLabel(s.date) + '</div><div style="font-size:0.75rem;color:var(--text2);margin-top:2px">' + s.data.title + ' · <span class=\"tag\" style=\"font-size:0.65rem\">' + s.data.phase + '</span></div>';
+      const tgSlots = daySlots(s.data);
+      const tgFirst = tgSlots.length > 0 ? tgSlots[0].sess : { title: '—', phase: '—' };
+      const tgTitle = tgSlots.length > 1 ? tgFirst.title + ' (2x)' : tgFirst.title;
+      toggleLeft.innerHTML = '<div style="font-weight:600;font-size:0.88rem">' + formatDateLabel(s.date) + '</div><div style="font-size:0.75rem;color:var(--text2);margin-top:2px">' + tgTitle + ' · <span class=\"tag\" style=\"font-size:0.65rem\">' + tgFirst.phase + '</span></div>';
       const toggleRight = document.createElement('div'); toggleRight.style.cssText = 'text-align:right;margin-right:10px';
       toggleRight.innerHTML = '<div style="font-size:0.85rem;font-weight:700;color:' + rpeColor(parseFloat(pastAvg)) + '">' + pastAvg + '</div><div style="font-size:0.65rem;color:var(--text2)">' + pastResponses.length + '/' + athletes.length + '</div>';
       const toggleArrow = document.createElement('span'); toggleArrow.style.color = 'var(--text2)'; toggleArrow.textContent = S.rpeHistOpen[s.date] ? '\u25b2' : '\u25bc';
@@ -928,7 +1230,8 @@ function buildCoachRPE() {
 
         // mini summary
         const miniSum = document.createElement('div'); miniSum.className = 'summary-row'; miniSum.style.cssText = 'margin-bottom:10px;margin-top:4px';
-        [{val: pastAvg, lbl:'RPE Medio'},{val: s.data.targetRPE||'—', lbl:'Objetivo'},{val: pastResponses.length + '/' + athletes.length, lbl:'Respuestas'}].forEach(function(item) {
+        const objStr = daySlots(s.data).map(function(sl){ return sl.sess.targetRPE; }).join('/') || '—';
+        [{val: pastAvg, lbl:'RPE Medio'},{val: objStr, lbl:'Objetivo'},{val: pastResponses.length + '/' + athletes.length, lbl:'Respuestas'}].forEach(function(item) {
           const box = document.createElement('div'); box.className = 'summary-box';
           box.innerHTML = '<div class=\"summary-val\" style=\"font-size:1.1rem\">' + item.val + '</div><div class=\"summary-lbl\">' + item.lbl + '</div>';
           miniSum.appendChild(box);
@@ -943,13 +1246,24 @@ function buildCoachRPE() {
           const tr = document.createElement('tr');
           const ns = name.split(' ')[0];
           if (entry) {
-            const delta = entry.rpe - (s.data.targetRPE || entry.rpe);
-            const fat = FATIGUE.find(function(f) { return f.v === entry.fatigue; }) || FATIGUE[0];
+            const subs = rpeSubmissions(entry);
+            const slotMap2 = normDay(s.data) || {};
+            const circles = subs.map(function(sub) {
+              return '<div class=\"rpe-circle\" style=\"background:' + rpeColor(sub.data.rpe) + ';width:26px;height:26px;font-size:0.75rem;display:inline-flex;margin-right:3px\">' + sub.data.rpe + '</div>';
+            }).join('');
+            const lastE = subs[subs.length-1].data;
+            const fat = FATIGUE.find(function(f) { return f.v === lastE.fatigue; }) || FATIGUE[0];
+            let ds2 = 0, dc2 = 0;
+            subs.forEach(function(sub) {
+              const t2 = slotMap2[sub.slot] ? slotMap2[sub.slot].targetRPE : null;
+              if (t2) { ds2 += sub.data.rpe - t2; dc2++; }
+            });
+            const delta = dc2 > 0 ? Math.round(ds2/dc2) : 0;
             const deltaStr = delta > 0 ? '+'+delta : delta < 0 ? ''+delta : '=';
             const deltaClass = delta > 0 ? 'plus' : delta < 0 ? 'minus' : '';
             const hasComment = !!getComments()[s.date+'_'+name];
-            const noteHtml = entry.note ? '<div style=\"font-size:0.7rem;color:var(--text2);font-style:italic\">&quot;' + entry.note + '&quot;</div>' : '';
-            tr.innerHTML = '<td>' + ns + noteHtml + '</td><td><div class=\"rpe-circle\" style=\"background:' + rpeColor(entry.rpe) + ';width:26px;height:26px;font-size:0.75rem\">' + entry.rpe + '</div></td><td><span class=\"fatigue-label\" style=\"background:' + fat.color + '22;color:' + fat.color + ';font-size:0.7rem\">' + fat.label + '</span></td><td><span class=\"delta ' + deltaClass + '\">' + deltaStr + '</span></td><td><button class=\"comment-btn\" data-ath=\"' + name + '\" data-date=\"' + s.date + '\">' + (hasComment ? '\ud83d\udcac' : '\u270f\ufe0f') + '</button></td>';
+            const noteHtml = lastE.note ? '<div style=\"font-size:0.7rem;color:var(--text2);font-style:italic\">\"' + lastE.note + '\"</div>' : '';
+            tr.innerHTML = '<td>' + ns + noteHtml + '</td><td>' + circles + '</td><td><span class=\"fatigue-label\" style=\"background:' + fat.color + '22;color:' + fat.color + ';font-size:0.7rem\">' + fat.label + '</span></td><td><span class=\"delta ' + deltaClass + '\">' + deltaStr + '</span></td><td><button class=\"comment-btn\" data-ath=\"' + name + '\" data-date=\"' + s.date + '\">' + (hasComment ? '\ud83d\udcac' : '\u270f\ufe0f') + '</button></td>';
           } else {
             tr.innerHTML = '<td>' + ns + '</td><td colspan=\"3\" style=\"color:var(--text2);font-size:0.78rem\">Sin respuesta</td><td></td>';
           }
@@ -1070,7 +1384,8 @@ function buildCalendar() {
       const btn = e.target.closest('.comp-del');
       if (!btn) return;
       const idx2 = parseInt(btn.dataset.idx);
-      const comps2 = getCompetitions(); comps2.splice(idx2,1); ls_set('tn:competitions', comps2); render();
+      const comp2 = DATA.competitions[idx2];
+      if (comp2) dbDeleteCompetition(comp2.id).then(function() { renderAsync(); });
     });
     monthComps.forEach((c, compIdx) => {
       const ci = document.createElement('div'); ci.className = 'comp-item';
@@ -1137,10 +1452,9 @@ function buildCalendar() {
         setTimeout(function() { btn.textContent = 'Añadir competición'; }, 2000);
         return;
       }
-      const comps = getCompetitions();
-      comps.push({ name: name.trim(), start: start, end: end || start, location: loc.trim(), type: type });
-      ls_set('tn:competitions', comps);
-      render();
+      dbAddCompetition({ name: name.trim(), start: start, end: end || start, location: loc.trim(), type: type }).then(function() {
+        renderAsync();
+      });
     };
     form.appendChild(addBtn);
     d.appendChild(form);
@@ -1163,12 +1477,13 @@ function buildCoachTeam() {
   const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;';
   const inp = document.createElement('input'); inp.type = 'text'; inp.placeholder = 'Nombre completo'; inp.id = 'new-athlete-name';
   const addBtn = document.createElement('button'); addBtn.className = 'btn btn-primary btn-sm'; addBtn.textContent = 'Añadir';
-  addBtn.onclick = () => {
-    const val = document.getElementById('new-athlete-name')?.value?.trim().toUpperCase();
+  addBtn.onclick = function() {
+    const inp2 = document.getElementById('new-athlete-name');
+    const val = inp2 ? inp2.value.trim().toUpperCase() : '';
     if (!val) return;
-    const athletes = getAthletes();
-    if (!athletes.includes(val)) { athletes.push(val); ls_set('tn:athletes', athletes); }
-    render();
+    if (!getAthletes().includes(val)) {
+      dbAddAthlete(val).then(function() { renderAsync(); });
+    }
   };
   row.append(inp, addBtn);
   addCard.appendChild(row);
@@ -1181,9 +1496,8 @@ function buildCoachTeam() {
     const item = document.createElement('div'); item.className = 'athlete-item';
     const n = document.createElement('span'); n.className = 'athlete-name'; n.textContent = name;
     const del = document.createElement('button'); del.className = 'btn-del'; del.textContent = '✕';
-    del.onclick = () => {
-      const athletes = getAthletes().filter(a => a !== name);
-      ls_set('tn:athletes', athletes); render();
+    del.onclick = function() {
+      dbDeleteAthlete(name).then(function() { renderAsync(); });
     };
     item.append(n, del);
     d.appendChild(item);
@@ -1206,7 +1520,8 @@ function buildCoachHistorial() {
 
   sessions.forEach(function(s) {
     const dt = dateObj(s.date);
-    const sess = s.data;
+    const hdrSlots = daySlots(s.data);
+    const first = hdrSlots.length > 0 ? hdrSlots[0].sess : { title: 'Sin título', phase: '—' };
 
     const row = document.createElement('div'); row.className = 'hist-row';
 
@@ -1215,7 +1530,11 @@ function buildCoachHistorial() {
     const dateBlock = document.createElement('div'); dateBlock.className = 'hist-date-block';
     dateBlock.innerHTML = '<div class="hist-day-name">' + DAYS_ES[dt.getDay()] + '</div><div class="hist-day-num">' + dt.getDate() + '</div><div class="hist-month">' + MONTHS_ES[dt.getMonth()].substring(0,3) + '</div>';
     const info = document.createElement('div'); info.className = 'hist-info';
-    info.innerHTML = '<div class="hist-title">' + (sess.title || 'Sin título') + '</div><div class="hist-meta"><span class="tag">' + sess.phase + '</span>' + (sess.alphaPhase ? '<span class="tag">' + sess.alphaPhase + '</span>' : '') + '<span>RPE obj: ' + (sess.targetRPE || '—') + '</span></div>';
+    const titleStr = hdrSlots.length > 1
+      ? first.title + ' <span style="font-size:0.7rem;color:var(--gold);font-weight:700">+ ' + hdrSlots[1].sess.title + ' (2x)</span>'
+      : (first.title || 'Sin título');
+    const targetStr = hdrSlots.map(function(sl){ return sl.sess.targetRPE; }).join(' / ') || '—';
+    info.innerHTML = '<div class="hist-title">' + titleStr + '</div><div class="hist-meta"><span class="tag">' + first.phase + '</span>' + (first.alphaPhase ? '<span class="tag">' + first.alphaPhase + '</span>' : '') + '<span>RPE obj: ' + targetStr + '</span></div>';
     const arrow = document.createElement('span'); arrow.style.color = 'var(--text2)'; arrow.textContent = S.histSessionOpen[s.date] ? '▲' : '▼';
     header.append(dateBlock, info, arrow);
     header.onclick = function() { S.histSessionOpen[s.date] = !S.histSessionOpen[s.date]; render(); };
@@ -1224,36 +1543,44 @@ function buildCoachHistorial() {
     if (S.histSessionOpen[s.date]) {
       const body = document.createElement('div'); body.className = 'hist-body open';
 
-      if (sess.phase === 'Fuerza') {
-        // AlphaPattern blocks
-        if (sess.alphaPhase) {
-          const apTag = document.createElement('div'); apTag.style.marginBottom = '10px';
-          apTag.innerHTML = '<span class="tag" style="font-size:0.75rem">' + sess.alphaPhase + '</span>';
-          body.appendChild(apTag);
+      const histSlots = daySlots(s.data);
+      histSlots.forEach(function(slotObj, si) {
+        const sess2 = slotObj.sess;
+        if (histSlots.length > 1) {
+          const sh = document.createElement('div');
+          sh.style.cssText = 'font-size:0.78rem;font-weight:700;color:var(--gold);margin-top:' + (si > 0 ? '16px' : '8px') + ';padding-bottom:4px;border-bottom:1px solid var(--border)';
+          sh.textContent = slotObj.label || '☀️ Mañana';
+          body.appendChild(sh);
         }
-        [['Pull', sess.pullText], ['Push', sess.pushText], ['Lower Body', sess.lowerText]].forEach(function(pair) {
-          if (!pair[1]) return;
-          const sec = document.createElement('div'); sec.className = 'session-section';
-          sec.innerHTML = '<div class="section-lbl">' + pair[0] + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
-          body.appendChild(sec);
-        });
-      } else {
-        // Normal swim session
-        var tm = 0;
-        [['Warm Up', sess.warmUp], ['Pre Set', sess.preSet], ['Main Set', sess.mainSet], ['Cool Down', sess.coolDown]].forEach(function(pair) {
-          if (!pair[1]) return;
-          const m = parseMeters(pair[1]);
-          if (m) tm += m;
-          const sec = document.createElement('div'); sec.className = 'session-section';
-          sec.innerHTML = '<div class="section-lbl">' + pair[0] + (m ? ' <span style=\"color:var(--accent2);font-weight:normal\">(' + m + ' m)</span>' : '') + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
-          body.appendChild(sec);
-        });
-        if (tm > 0) {
-          const tmDiv = document.createElement('div'); tmDiv.className = 'total-meters'; tmDiv.style.marginTop = '10px';
-          tmDiv.innerHTML = '<span>Total sesión</span><span style="font-weight:700;color:var(--accent2)">' + tm + ' m</span>';
-          body.appendChild(tmDiv);
+        if (sess2.phase === 'Fuerza') {
+          if (sess2.alphaPhase) {
+            const apTag = document.createElement('div'); apTag.style.marginBottom = '10px';
+            apTag.innerHTML = '<span class="tag" style="font-size:0.75rem">' + sess2.alphaPhase + '</span>';
+            body.appendChild(apTag);
+          }
+          [['Pull', sess2.pullText], ['Push', sess2.pushText], ['Lower Body', sess2.lowerText]].forEach(function(pair) {
+            if (!pair[1]) return;
+            const sec = document.createElement('div'); sec.className = 'session-section';
+            sec.innerHTML = '<div class="section-lbl">' + pair[0] + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
+            body.appendChild(sec);
+          });
+        } else {
+          var tm = 0;
+          [['Warm Up', sess2.warmUp], ['Pre Set', sess2.preSet], ['Main Set', sess2.mainSet], ['Cool Down', sess2.coolDown]].forEach(function(pair) {
+            if (!pair[1]) return;
+            const m = parseMeters(pair[1]);
+            if (m) tm += m;
+            const sec = document.createElement('div'); sec.className = 'session-section';
+            sec.innerHTML = '<div class="section-lbl">' + pair[0] + (m ? ' <span style=\"color:var(--accent2);font-weight:normal\">(' + m + ' m)</span>' : '') + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
+            body.appendChild(sec);
+          });
+          if (tm > 0) {
+            const tmDiv = document.createElement('div'); tmDiv.className = 'total-meters'; tmDiv.style.marginTop = '10px';
+            tmDiv.innerHTML = '<span>Total' + (histSlots.length > 1 ? ' ' + slotObj.slot.toUpperCase() : ' sesión') + '</span><span style="font-weight:700;color:var(--accent2)">' + tm + ' m</span>';
+            body.appendChild(tmDiv);
+          }
         }
-      }
+      });
       row.appendChild(body);
     }
     d.appendChild(row);
@@ -1315,42 +1642,53 @@ function buildAthleteInicio() {
     if (isPast && !session) continue; // hidden
 
     const dc = document.createElement('div'); dc.className = 'day-card' + (isToday ? ' today-card' : '');
-    if (isFuture && !session) dc.classList.add('greyed');
+    const slots = daySlots(session);
+    if (isFuture && slots.length === 0) dc.classList.add('greyed');
 
+    const titles = slots.length > 0 ? slots.map(function(s){ return (s.label ? s.label + ' ' : '') + s.sess.title; }).join(' · ') : 'Sin sesión';
     const dch = document.createElement('div'); dch.className = 'day-card-header';
-    dch.innerHTML = `<div><div class="day-name">${DAYS_ES[dt.getDay()]} ${dt.getDate()}</div><div class="day-phase">${session ? session.title : 'Sin sesión'}</div></div>`;
-    if (session) {
-      const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = session.phase;
+    dch.innerHTML = `<div><div class="day-name">${DAYS_ES[dt.getDay()]} ${dt.getDate()}${slots.length > 1 ? ' <span style="font-size:0.65rem;color:var(--gold);font-weight:700">2x</span>' : ''}</div><div class="day-phase">${titles}</div></div>`;
+    if (slots.length > 0) {
+      const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = slots[0].sess.phase;
       dch.appendChild(tag);
     }
     dch.onclick = () => {
-      if (!session) return;
+      if (slots.length === 0) return;
       S.dayCardOpen[ds] = !S.dayCardOpen[ds]; render();
     };
     dc.appendChild(dch);
 
-    if (session && S.dayCardOpen[ds]) {
+    if (slots.length > 0 && S.dayCardOpen[ds]) {
       const body = document.createElement('div'); body.className = 'day-card-body open';
-      if (session.phase === 'Fuerza') {
-        if (session.alphaPhase) { const ap = document.createElement('div'); ap.innerHTML = `<span class="tag" style="margin-bottom:8px">${session.alphaPhase}</span>`; body.appendChild(ap); }
-        [['Pull',session.pullText],['Push',session.pushText],['Lower Body',session.lowerText]].forEach(([sec,txt]) => {
-          if (txt) {
-            const ss = document.createElement('div'); ss.className = 'session-section';
-            ss.innerHTML = `<div class="section-lbl">${sec}</div><div class="session-lines">${renderTextWithNotes(txt)}</div>`;
-            body.appendChild(ss);
-          }
-        });
-      } else {
-        [['Warm Up',session.warmUp],['Pre Set',session.preSet],['Main Set',session.mainSet],['Cool Down',session.coolDown]].forEach(([sec,txt]) => {
-          if (txt) {
-            const ss = document.createElement('div'); ss.className = 'session-section';
-            ss.innerHTML = `<div class="section-lbl">${sec}</div><div class="session-lines">${renderTextWithNotes(txt)}</div>`;
-            body.appendChild(ss);
-          }
-        });
-        const tm = totalMeters({...session});
-        if (tm > 0) { const t = document.createElement('div'); t.className='total-meters';t.style.marginTop='10px';t.innerHTML=`<span>Total</span><span style="font-weight:700;color:var(--accent2)">${tm} m</span>`;body.appendChild(t); }
-      }
+      slots.forEach(function(slotObj, slotIdx) {
+        const sess = slotObj.sess;
+        if (slots.length > 1) {
+          const slotHdr = document.createElement('div');
+          slotHdr.style.cssText = 'font-size:0.78rem;font-weight:700;color:var(--gold);margin-top:' + (slotIdx > 0 ? '16px' : '10px') + ';padding-bottom:4px;border-bottom:1px solid var(--border)';
+          slotHdr.textContent = slotObj.label || '☀️ Mañana';
+          body.appendChild(slotHdr);
+        }
+        if (sess.phase === 'Fuerza') {
+          if (sess.alphaPhase) { const ap = document.createElement('div'); ap.innerHTML = '<span class="tag" style="margin-bottom:8px">' + sess.alphaPhase + '</span>'; body.appendChild(ap); }
+          [['Pull',sess.pullText],['Push',sess.pushText],['Lower Body',sess.lowerText]].forEach(function(pair) {
+            if (pair[1]) {
+              const ss = document.createElement('div'); ss.className = 'session-section';
+              ss.innerHTML = '<div class="section-lbl">' + pair[0] + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
+              body.appendChild(ss);
+            }
+          });
+        } else {
+          [['Warm Up',sess.warmUp],['Pre Set',sess.preSet],['Main Set',sess.mainSet],['Cool Down',sess.coolDown]].forEach(function(pair) {
+            if (pair[1]) {
+              const ss = document.createElement('div'); ss.className = 'session-section';
+              ss.innerHTML = '<div class="section-lbl">' + pair[0] + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
+              body.appendChild(ss);
+            }
+          });
+          const tm = totalMeters(sess);
+          if (tm > 0) { const t = document.createElement('div'); t.className='total-meters';t.style.marginTop='10px';t.innerHTML='<span>Total' + (slots.length > 1 ? ' ' + slotObj.slot.toUpperCase() : '') + '</span><span style="font-weight:700;color:var(--accent2)">' + tm + ' m</span>';body.appendChild(t); }
+        }
+      });
       dc.appendChild(body);
     }
     d.appendChild(dc);
@@ -1364,31 +1702,62 @@ function buildAthleteInicio() {
 function buildAthleteRPE() {
   const d = document.createElement('div');
   const today = todayStr();
-  const session = getSession(today);
+  const rawSession = getSession(today);
+  const slots = daySlots(rawSession);
+  const double = slots.length > 1;
 
+  // Determine active slot: S.rpeSlot ('am'|'pm'), default first un-submitted
+  const entry = normRPE(getDayRPE(today)[S.athleteName]);
+  if (!S.rpeSlot || !double) {
+    if (double) {
+      S.rpeSlot = (entry && entry.am) ? 'pm' : 'am';
+    } else {
+      S.rpeSlot = 'am';
+    }
+  }
+
+  // Session info card
   const sessionCard = document.createElement('div'); sessionCard.className = 'card'; sessionCard.style.marginBottom='16px';
-  if (session) {
-    sessionCard.innerHTML = `<div class="card-title">${session.title}</div><div class="card-sub">RPE objetivo entrenador: <strong>${session.targetRPE}</strong></div>`;
+  if (slots.length > 0) {
+    sessionCard.innerHTML = slots.map(function(s) {
+      return '<div class="card-title">' + (s.label ? s.label + ' — ' : '') + s.sess.title + '</div>'
+        + '<div class="card-sub">RPE objetivo: <strong>' + s.sess.targetRPE + '</strong></div>';
+    }).join('<div style="height:6px"></div>');
   } else {
     sessionCard.innerHTML = '<div class="card-sub" style="text-align:center">Sin sesión para hoy</div>';
   }
   d.appendChild(sessionCard);
 
-  // Check already submitted
-  const existing = getDayRPE(today)[S.athleteName];
-  if (existing) {
-    const fat = FATIGUE.find(f=>f.v===existing.fatigue)||FATIGUE[0];
+  // Slot tabs for double days
+  if (double) {
+    const slotTabs = document.createElement('div'); slotTabs.className = 'pack-toggle'; slotTabs.style.marginBottom = '14px';
+    [['am','☀️ Mañana'],['pm','🌙 Tarde']].forEach(function(pair) {
+      const done = entry && entry[pair[0]];
+      const btn = document.createElement('button');
+      btn.className = 'pack-btn' + (S.rpeSlot === pair[0] ? ' active' : '');
+      btn.innerHTML = pair[1] + (done ? ' ✓' : '');
+      btn.onclick = function() { S.rpeSlot = pair[0]; S.rpeSelected = null; S.fatigueSelected = null; S.rpeNote = ''; render(); };
+      slotTabs.appendChild(btn);
+    });
+    d.appendChild(slotTabs);
+  }
+
+  // Already submitted this slot?
+  const slotEntry = entry ? entry[double ? S.rpeSlot : 'am'] : null;
+  if (slotEntry) {
+    const fat = FATIGUE.find(function(f){return f.v===slotEntry.fatigue;}) || FATIGUE[0];
     const cs = document.createElement('div'); cs.className = 'confirm-screen';
-    cs.innerHTML = `<div class="confirm-emoji">✅</div><div class="confirm-rpe" style="color:${rpeColor(existing.rpe)}">${existing.rpe}</div><div class="confirm-label">RPE registrado · <span style="color:${fat.color}">${fat.label}</span></div><div style="margin-top:20px;font-size:0.8rem;color:var(--text2)">Ya registraste tu RPE hoy</div>`;
+    cs.innerHTML = '<div class="confirm-emoji">✅</div><div class="confirm-rpe" style="color:' + rpeColor(slotEntry.rpe) + '">' + slotEntry.rpe + '</div><div class="confirm-label">RPE registrado · <span style="color:' + fat.color + '">' + fat.label + '</span></div><div style="margin-top:20px;font-size:0.8rem;color:var(--text2)">Ya registraste tu RPE' + (double ? ' de este turno' : ' hoy') + '</div>';
     d.appendChild(cs);
     return d;
   }
 
   if (S.rpeSubmitted) {
-    const fat = FATIGUE.find(f=>f.v===S.fatigueSelected)||FATIGUE[0];
+    const fat = FATIGUE.find(function(f){return f.v===S.fatigueSelected;}) || FATIGUE[0];
     const cs = document.createElement('div'); cs.className = 'confirm-screen';
-    cs.innerHTML = `<div class="confirm-emoji">🎯</div><div class="confirm-rpe" style="color:${rpeColor(S.rpeSelected)}">${S.rpeSelected}</div><div class="confirm-label">Registrado · <span style="color:${fat.color}">${fat.label}</span></div>`;
+    cs.innerHTML = '<div class="confirm-emoji">🎯</div><div class="confirm-rpe" style="color:' + rpeColor(S.rpeSelected) + '">' + S.rpeSelected + '</div><div class="confirm-label">Registrado · <span style="color:' + fat.color + '">' + fat.label + '</span></div>';
     d.appendChild(cs);
+    S.rpeSubmitted = false;
     return d;
   }
 
@@ -1425,19 +1794,17 @@ function buildAthleteRPE() {
   d.appendChild(noteIn);
 
   // Submit
-  const submitBtn = document.createElement('button'); submitBtn.className='btn btn-primary'; submitBtn.style.marginTop='20px'; submitBtn.textContent='Registrar RPE';
+  const submitBtn = document.createElement('button'); submitBtn.className='btn btn-primary'; submitBtn.style.marginTop='20px';
+  submitBtn.textContent = 'Registrar RPE' + (double ? (S.rpeSlot === 'am' ? ' (Mañana)' : ' (Tarde)') : '');
   submitBtn.onclick = () => {
     if (!S.rpeSelected || !S.fatigueSelected) {
       alert('Selecciona RPE y estado de fatiga'); return;
     }
-    const dayRPE = getDayRPE(today);
-    dayRPE[S.athleteName] = { rpe: S.rpeSelected, fatigue: S.fatigueSelected, note: S.rpeNote, ts: Date.now() };
-    ls_set('tn:rpe:' + today, dayRPE);
-    // hist
-    const hist = ls_get('tn:hist:'+S.athleteName, []);
-    hist.push({ date: today, rpe: S.rpeSelected, fatigue: S.fatigueSelected });
-    ls_set('tn:hist:'+S.athleteName, hist);
-    S.rpeSubmitted = true; render();
+    const slotKey = double ? S.rpeSlot : 'am';
+    dbSaveRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote).then(function() {
+      S.rpeSubmitted = true;
+      renderAsync();
+    });
   };
   d.appendChild(submitBtn);
   return d;
@@ -1448,7 +1815,7 @@ function buildAthleteRPE() {
 // ============================================================
 function buildAthleteStats() {
   const d = document.createElement('div');
-  const hist = ls_get('tn:hist:'+S.athleteName, []);
+  const hist = DATA.athleteHist[S.athleteName] || [];
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'MI TEMPORADA';
   d.appendChild(st);
 
@@ -1570,10 +1937,10 @@ function buildCommentSheet() {
 
   const saveBtn = document.createElement('button'); saveBtn.className='btn btn-primary'; saveBtn.style.marginTop='10px'; saveBtn.textContent='Guardar mensaje';
   saveBtn.onclick = function() {
-    const comments = getComments();
-    comments[dateKey+'_'+S.commentAthlete] = S.commentText;
-    ls_set('tn:comments', comments);
-    S.commentAthlete=null; S.commentDate=null; render();
+    dbSaveComment(dateKey, S.commentAthlete, S.commentText).then(function() {
+      S.commentAthlete=null; S.commentDate=null;
+      renderAsync();
+    });
   };
 
   sheet.append(title, ta, saveBtn);
@@ -1584,91 +1951,14 @@ function buildCommentSheet() {
 // ============================================================
 // INIT
 // ============================================================
-getAthletes(); // ensure default athletes initialized
+// Athletes seeded on first load via Supabase
 
 // ============================================================
 // SEED DATA — Semana 2-8 Junio 2026
 // ============================================================
-function seedDemoData() {
-  if (ls_get('tn:seeded:v2', false)) return;
-
-  // ── Plantillas de sesiones simples (rotación semanal Lun-Sáb) ──
-  const templates = [
-    { title: 'Aeróbico base', phase: 'Ligero', targetRPE: 4,
-      warmUp: "400 FC suave", preSet: "4x50 SP c/1'15\"", mainSet: "8x100 FC c/1'50\" @ ritmo cómodo", coolDown: "200 Espalda suave" },
-    { title: 'Umbral', phase: 'Desarrollo', targetRPE: 7,
-      warmUp: "500 FC mixto", preSet: "6x50 c/1'10\" @ progresivo", mainSet: "4x200 c/3'00\" @ umbral", coolDown: "300 suave" },
-    { title: 'NeuroForce fuerza', phase: 'Fuerza', targetRPE: 8, alphaPhase: 'Force Integration',
-      pullText: "Dominadas 4x5\nRemo TRX 3x10", pushText: "Press banca 4x6\nFlexiones 3x12", lowerText: "Sentadilla 4x8\nSalto cajón 3x5" },
-    { title: 'Recuperación', phase: 'Recuperación', targetRPE: 3,
-      warmUp: "300 FC muy suave", preSet: "4x50 técnica c/1'30\"", mainSet: "6x100 FC c/2'00\" @ suave", coolDown: "200 patada" },
-    { title: 'Velocidad', phase: 'Impacto', targetRPE: 8,
-      warmUp: "400 FC", preSet: "6x25 progresivos c/50\"", mainSet: "10x25 sprint c/1'30\"\n4x50 c/2'00\" @ máxima", coolDown: "300 suave" },
-    { title: 'Técnica + ritmo', phase: 'Desarrollo', targetRPE: 6,
-      warmUp: "400 mixto", preSet: "8x25 técnica c/45\"", mainSet: "3x300 c/4'30\" @ ritmo controlado", coolDown: "200 Espalda" }
-  ];
-
-  const todayD = new Date();
-  const year = todayD.getFullYear(), month = todayD.getMonth(); // mes actual
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const pad = function(n) { return String(n).padStart(2, '0'); };
-
-  const athletes = getAthletes();
-  const histBatch = {};
-
-  for (let day = 1; day <= daysInMonth; day++) {
-    const d2 = new Date(year, month, day);
-    const dow = d2.getDay(); // 0=Dom
-    if (dow === 0) continue; // domingo descanso
-    const ds = year + '-' + pad(month + 1) + '-' + pad(day);
-    const tpl = templates[(day + dow) % templates.length];
-    ls_set('tn:session:' + ds, tpl);
-
-    // RPE solo para días pasados
-    if (d2 < todayD && ds !== todayStr()) {
-      const dayObj = {};
-      athletes.forEach(function(name, ai) {
-        // ~80% responden; variación determinista
-        if ((day + ai) % 5 === 0) return;
-        const base = tpl.targetRPE;
-        const variation = ((day * 7 + ai * 3) % 5) - 2; // -2..+2
-        const rpe = Math.max(1, Math.min(10, base + variation));
-        const fat = Math.max(1, Math.min(5, Math.round(rpe / 2)));
-        dayObj[name] = { rpe: rpe, fatigue: fat, note: '', ts: 0 };
-        if (!histBatch[name]) histBatch[name] = [];
-        histBatch[name].push({ date: ds, rpe: rpe, fatigue: fat });
-      });
-      ls_set('tn:rpe:' + ds, dayObj);
-    }
-  }
-
-  Object.entries(histBatch).forEach(function(pair) {
-    ls_set('tn:hist:' + pair[0], pair[1]);
-  });
-
-  // ── Competiciones variadas en el mes actual ──
-  const mk = function(d) { return year + '-' + pad(month + 1) + '-' + pad(d); };
-  ls_set('tn:competitions', [
-    { name: 'Trofeu Ciutat de Terrassa', start: mk(6),  end: mk(6),  location: 'Club Natació Terrassa', type: 'Regional' },
-    { name: 'Campeonato de Catalunya',   start: mk(17), end: mk(20), location: 'Piscina Sant Jordi Barcelona', type: 'Autonómico' },
-    { name: 'Campeonato de España Infantil', start: mk(25), end: mk(28), location: 'M86 Madrid', type: 'Nacional' },
-    { name: 'Meeting Internacional Mare Nostrum', start: mk(13), end: mk(14), location: 'Piscines Bernat Picornell Barcelona', type: 'Internacional' },
-    { name: 'Jornada técnica de salidas', start: mk(22), end: mk(22), location: 'CN Terrassa', type: 'Otros' }
-  ]);
-
-  // ── Comentarios del coach ──
-  const c = {};
-  c[mk(3) + '_RIERA MARIO'] = 'Mario, controla el ritmo en umbral — sales demasiado rápido los primeros 50.';
-  c[mk(5) + '_GUILLEM GÁLVEZ'] = 'Guillem, gran semana. El viernes probamos carga nueva en dominadas.';
-  c[mk(9) + '_QUIÑONERO MARTINA'] = 'Martina, tu técnica de giro ha mejorado mucho. Sigue con los ejercicios en casa.';
-  ls_set('tn:comments', c);
-
-  ls_set('tn:seeded:v2', true);
-}
-
+function seedDemoData() { /* disabled — data lives in Supabase */ }
 seedDemoData();
-
-render();
+renderAsync();
 </script>
 </body>
 </html>
