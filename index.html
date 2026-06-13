@@ -394,11 +394,14 @@ async function dbSaveSession(date, slot, sessObj) {
   _allSessionsCache = null;
   return res; // null si falló, array si guardó
 }
-async function dbGetAllSessions() {
+async function dbGetAllSessions(weeks) {
+  // Ventana de arranque: solo las últimas N semanas (por defecto 6).
   if (_allSessionsCache) return _allSessionsCache;
-  const rows = await sbFetch('sessions?select=*&order=date.desc');
+  const w = weeks || 6;
+  const from = new Date(); from.setDate(from.getDate() - w * 7);
+  const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
+  const rows = await sbFetch('sessions?select=*&date=gte.' + fromS + '&order=date.desc');
   if (!rows) return [];
-  // Group by date
   const byDate = {};
   rows.forEach(r => {
     if (!byDate[r.date]) byDate[r.date] = { am: null, pm: null };
@@ -406,7 +409,34 @@ async function dbGetAllSessions() {
     byDate[r.date][r.slot] = sess;
   });
   _allSessionsCache = Object.entries(byDate).map(([date, data]) => ({ date, data })).sort((a,b) => b.date.localeCompare(a.date));
+  _loadedMonths = {};
+  // marcar los meses ya cubiertos por la ventana inicial
+  _allSessionsCache.forEach(function(s){ _loadedMonths[s.date.slice(0,7)] = true; });
   return _allSessionsCache;
+}
+
+// Carga un mes concreto bajo demanda (formato 'YYYY-MM'). Fusiona en la caché.
+let _loadedMonths = {};
+async function dbLoadSessionMonth(ym) {
+  if (_loadedMonths[ym]) return;
+  const first = ym + '-01';
+  const [y, m] = ym.split('-').map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  const last = ym + '-' + String(lastDay).padStart(2,'0');
+  const rows = await sbFetch('sessions?select=*&date=gte.' + first + '&date=lte.' + last + '&order=date.desc');
+  _loadedMonths[ym] = true;
+  if (!rows || rows.length === 0) return;
+  const byDate = {};
+  rows.forEach(r => {
+    if (!byDate[r.date]) byDate[r.date] = { am: null, pm: null };
+    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, alphaPhase: r.alpha_phase };
+    byDate[r.date][r.slot] = sess;
+  });
+  const existing = {}; (_allSessionsCache || []).forEach(function(s){ existing[s.date] = s; });
+  Object.entries(byDate).forEach(([date, data]) => { existing[date] = { date, data }; });
+  _allSessionsCache = Object.values(existing).sort((a,b) => b.date.localeCompare(a.date));
+  DATA.allSessions = _allSessionsCache;
+  DATA.sessions = {}; _allSessionsCache.forEach(x => { DATA.sessions[x.date] = x.data; });
 }
 
 // ── RPE ────────────────────────────────────────────────────
@@ -516,7 +546,7 @@ async function dbAddCompetition(comp) {
 async function dbDeleteSession(date) {
   await sbFetch('sessions?date=eq.' + date, { method: 'DELETE', prefer: 'return=minimal' });
   delete _sessionCache[date];
-  _allSessionsCache = null;
+  // NO anulamos _allSessionsCache: el llamador la actualiza en memoria para no perder meses cargados
 }
 async function dbSetInscWindow(compId, openDate, closeDate) {
   const body = {};
@@ -650,6 +680,7 @@ let S = {
   // rpe coach expanded
   rpeHistOpen: {},
   histSessionOpen: {},
+  histMonth: null,
   // athlete
   ath_tab: 0,
   rpeSelected: null,
@@ -697,7 +728,7 @@ async function loadData() {
   // Las cachés evitan refetch de lo que no cambió tras una acción.
   const tasks = [
     dbGetAthletes().then(a => { DATA.athletes = a; }),
-    dbGetAllSessions().then(s => {
+    dbGetAllSessions(6).then(s => {
       DATA.allSessions = s;
       DATA.sessions = {};
       s.forEach(x => { DATA.sessions[x.date] = x.data; });
@@ -1173,7 +1204,7 @@ function buildCoachSession() {
       const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = sec.label;
       d.appendChild(lbl);
       const ta = document.createElement('textarea');
-      ta.placeholder = 'Ej: 4x50 SP c/1\'10" @ concentración en rolido'; ta.value = S[sec.key];
+      ta.placeholder = ''; ta.value = S[sec.key];
       ta.oninput = e => { S[sec.key] = e.target.value; updateMeters(d); };
       ta.dataset.key = sec.key;
       d.appendChild(ta);
@@ -1710,9 +1741,45 @@ function buildCoachHistorial() {
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'HISTORIAL DE SESIONES';
   d.appendChild(st);
 
-  const sessions = getAllSessions();
+  // Mes activo del historial (por defecto, el actual)
+  if (!S.histMonth) { const n = new Date(); S.histMonth = n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0'); }
+
+  // Selector de mes ‹ Junio 2026 ›
+  const nav = document.createElement('div');
+  nav.style.cssText = 'display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:6px;margin-bottom:14px';
+  const mkNav = function(txt) { const b = document.createElement('button'); b.textContent = txt; b.style.cssText = 'background:var(--surface2);border:1px solid var(--border);color:var(--text2);width:40px;height:40px;border-radius:9px;font-size:1.1rem;cursor:pointer'; return b; };
+  const prevB = mkNav('‹'), nextB = mkNav('›');
+  const [hy, hm] = S.histMonth.split('-').map(Number);
+  const lbl = document.createElement('span');
+  lbl.style.cssText = 'font-weight:700;color:var(--text)';
+  lbl.textContent = MONTHS_ES[hm-1] + ' ' + hy;
+  const shiftMonth = function(delta) {
+    let y = hy, m = hm - 1 + delta;
+    if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
+    S.histMonth = y + '-' + String(m+1).padStart(2,'0');
+  };
+  prevB.onclick = function() {
+    shiftMonth(-1);
+    const ym = S.histMonth;
+    if (!_loadedMonths[ym]) { prevB.textContent = '…'; dbLoadSessionMonth(ym).then(render); } else render();
+  };
+  const nowYM = new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0');
+  nextB.disabled = (S.histMonth >= nowYM);
+  if (nextB.disabled) nextB.style.opacity = '0.3';
+  nextB.onclick = function() {
+    shiftMonth(1);
+    const ym = S.histMonth;
+    if (!_loadedMonths[ym]) { nextB.textContent = '…'; dbLoadSessionMonth(ym).then(render); } else render();
+  };
+  nav.append(prevB, lbl, nextB);
+  d.appendChild(nav);
+
+  // Filtrar sesiones del mes activo
+  const sessions = getAllSessions().filter(function(s){ return s.date.slice(0,7) === S.histMonth; });
   if (sessions.length === 0) {
-    const e = document.createElement('div'); e.className = 'empty-state'; e.textContent = 'No hay sesiones registradas'; d.appendChild(e); return d;
+    const e = document.createElement('div'); e.className = 'empty-state';
+    e.textContent = _loadedMonths[S.histMonth] ? 'No hay sesiones este mes' : 'Cargando…';
+    d.appendChild(e); return d;
   }
 
   sessions.forEach(function(s) {
@@ -1746,11 +1813,11 @@ function buildCoachHistorial() {
         delBtn.disabled = true; delBtn.innerHTML = '…';
         dbDeleteSession(s.date).then(function() {
           delete S.histSessionOpen[s.date];
-          dbGetAllSessions().then(function(rows) {
-            DATA.allSessions = rows;
-            DATA.sessions = {}; rows.forEach(function(x){ DATA.sessions[x.date] = x.data; });
-            render();
-          });
+          // quitar de la caché en memoria sin refetch (preserva meses cargados)
+          _allSessionsCache = (_allSessionsCache || []).filter(function(x){ return x.date !== s.date; });
+          DATA.allSessions = _allSessionsCache;
+          DATA.sessions = {}; _allSessionsCache.forEach(function(x){ DATA.sessions[x.date] = x.data; });
+          render();
         });
       });
     };
