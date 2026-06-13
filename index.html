@@ -389,9 +389,10 @@ async function dbSaveSession(date, slot, sessObj) {
   await sbFetch('sessions?date=eq.' + date + '&slot=eq.' + slot, {
     method: 'DELETE', prefer: 'return=minimal'
   });
-  await sbFetch('sessions', { method: 'POST', body: JSON.stringify(body) });
+  const res = await sbFetch('sessions', { method: 'POST', body: JSON.stringify(body) });
   delete _sessionCache[date];
   _allSessionsCache = null;
+  return res; // null si falló, array si guardó
 }
 async function dbGetAllSessions() {
   if (_allSessionsCache) return _allSessionsCache;
@@ -1246,10 +1247,26 @@ function buildCoachSession() {
         publishPromises.push(dbSaveSession(ds, sl, session));
       });
     }
-    Promise.all(publishPromises).then(function() { renderAsync(); });
-    this.textContent = '✓ Publicado';
-    this.style.background = '#27ae60';
-    setTimeout(() => { this.textContent = 'Publicar'; this.style.background = ''; }, 2000);
+    const btn = this;
+    btn.disabled = true; btn.textContent = 'Publicando…';
+    Promise.all(publishPromises).then(function(results) {
+      // verificar que TODOS los guardados respondieron ok (no null)
+      const allOk = results.every(function(r) { return r !== null && r !== false; });
+      if (!allOk) {
+        btn.disabled = false; btn.textContent = '⚠ Error — reintenta'; btn.style.background = '#c0392b';
+        setTimeout(function(){ btn.textContent = 'Publicar'; btn.style.background = ''; }, 2500);
+        return; // NO se limpia: el texto se conserva
+      }
+      // guardado confirmado → limpiar formulario
+      S.sessionTitle=''; S.sessionRPE=6; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
+      S.alphaPhase=null; S.pullText=''; S.pushText=''; S.lowerText='';
+      S.warmUp=''; S.preSet=''; S.mainSet=''; S.coolDown=''; S.packDays=1;
+      btn.textContent = '✓ Publicado'; btn.style.background = '#27ae60';
+      renderAsync();
+    }).catch(function() {
+      btn.disabled = false; btn.textContent = '⚠ Error de conexión'; btn.style.background = '#c0392b';
+      setTimeout(function(){ btn.textContent = 'Publicar'; btn.style.background = ''; }, 2500);
+    });
   };
   actions.appendChild(pubBtn);
   d.appendChild(actions);
