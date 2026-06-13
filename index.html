@@ -255,6 +255,33 @@
   .insc-comp-sel { display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; margin-bottom:10px; }
   .insc-comp-sel button { flex:0 0 auto; background:var(--surface); border:1px solid var(--border); color:var(--text2); padding:8px 14px; border-radius:10px; font-size:0.78rem; font-weight:600; cursor:pointer; }
   .insc-comp-sel button.on { background:var(--accent); color:#fff; border-color:var(--accent2); }
+
+  /* ── Modal confirmación ── */
+  .confirm-back { position:fixed; inset:0; background:rgba(4,16,31,0.78); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:200; padding:24px; animation:fadeIn 0.15s ease; }
+  .confirm-box { background:var(--surface2); border:1px solid var(--border); border-radius:18px; padding:24px 22px; max-width:380px; width:100%; box-shadow:0 20px 60px rgba(0,0,0,0.5); animation:popIn 0.18s ease; }
+  .confirm-title { font-size:1.05rem; font-weight:700; color:var(--text); margin-bottom:8px; }
+  .confirm-msg { font-size:0.86rem; color:var(--text2); line-height:1.5; margin-bottom:20px; }
+  .confirm-btns { display:flex; gap:10px; }
+  .confirm-btns button { flex:1; padding:13px; border-radius:11px; border:none; font-size:0.92rem; font-weight:700; cursor:pointer; transition:transform 0.1s; }
+  .confirm-btns button:active { transform:scale(0.96); }
+  .confirm-cancel { background:var(--surface); color:var(--text2); border:1px solid var(--border) !important; }
+  .confirm-ok { background:var(--red); color:#fff; }
+  .confirm-ok.safe { background:var(--accent); }
+  @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+  @keyframes popIn { from{opacity:0;transform:scale(0.94)} to{opacity:1;transform:scale(1)} }
+
+  /* ── Botón borrar entreno en historial ── */
+  .sess-del-btn { background:rgba(192,57,43,0.12); border:1px solid rgba(192,57,43,0.35); color:var(--red2); width:34px; height:34px; border-radius:9px; font-size:0.95rem; cursor:pointer; flex-shrink:0; margin-right:8px; transition:all 0.12s; }
+  .sess-del-btn:active { transform:scale(0.9); background:rgba(192,57,43,0.25); }
+
+  /* ── Botones abrir/cerrar inscripción ── */
+  .insc-ctrl { display:flex; gap:10px; margin:12px 0; }
+  .insc-ctrl button { flex:1; padding:13px; border-radius:12px; border:none; font-size:0.88rem; font-weight:700; cursor:pointer; transition:transform 0.1s; }
+  .insc-ctrl button:active { transform:scale(0.97); }
+  .insc-ctrl .open-btn { background:var(--green); color:#fff; }
+  .insc-ctrl .close-btn { background:var(--red); color:#fff; }
+  .insc-ctrl button:disabled { opacity:0.4; cursor:default; }
+  .insc-ctrl button:disabled:active { transform:none; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
@@ -485,6 +512,18 @@ async function dbAddCompetition(comp) {
   });
   _compCache = null;
 }
+async function dbDeleteSession(date) {
+  await sbFetch('sessions?date=eq.' + date, { method: 'DELETE', prefer: 'return=minimal' });
+  delete _sessionCache[date];
+  _allSessionsCache = null;
+}
+async function dbSetInscWindow(compId, openDate, closeDate) {
+  const body = {};
+  if (openDate !== undefined) body.insc_open = openDate;
+  if (closeDate !== undefined) body.insc_close = closeDate;
+  await sbFetch('competitions?id=eq.' + compId, { method: 'PATCH', body: JSON.stringify(body), prefer: 'return=minimal' });
+  _compCache = null;
+}
 async function dbDeleteCompetition(id) {
   await sbFetch('competitions?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' });
   _compCache = null;
@@ -520,6 +559,32 @@ let _loading = false;
 function showLoading() {
   const app = document.getElementById('app');
   if (app) app.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--text2);font-size:0.9rem;gap:12px"><span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Cargando...</div>';
+}
+
+function showConfirm(title, message, onConfirm, opts) {
+  opts = opts || {};
+  const back = document.createElement('div');
+  back.className = 'confirm-back';
+  const box = document.createElement('div');
+  box.className = 'confirm-box';
+  box.innerHTML = '<div class="confirm-title">' + title + '</div>'
+    + (message ? '<div class="confirm-msg">' + message + '</div>' : '');
+  const btns = document.createElement('div');
+  btns.className = 'confirm-btns';
+  const cancel = document.createElement('button');
+  cancel.className = 'confirm-cancel';
+  cancel.textContent = opts.cancelText || 'Cancelar';
+  const ok = document.createElement('button');
+  ok.className = 'confirm-ok';
+  ok.textContent = opts.okText || 'Borrar';
+  if (opts.okSafe) ok.classList.add('safe');
+  cancel.onclick = function() { back.remove(); };
+  back.onclick = function(e) { if (e.target === back) back.remove(); };
+  ok.onclick = function() { back.remove(); onConfirm(); };
+  btns.append(cancel, ok);
+  box.appendChild(btns);
+  back.appendChild(box);
+  document.body.appendChild(back);
 }
 
 // ============================================================
@@ -1651,7 +1716,29 @@ function buildCoachHistorial() {
     const targetStr = hdrSlots.map(function(sl){ return sl.sess.targetRPE; }).join(' / ') || '—';
     info.innerHTML = '<div class="hist-title">' + titleStr + '</div><div class="hist-meta"><span class="tag">' + first.phase + '</span>' + (first.alphaPhase ? '<span class="tag">' + first.alphaPhase + '</span>' : '') + '<span>RPE obj: ' + targetStr + '</span></div>';
     const arrow = document.createElement('span'); arrow.style.color = 'var(--text2)'; arrow.textContent = S.histSessionOpen[s.date] ? '▲' : '▼';
-    header.append(dateBlock, info, arrow);
+
+    // Botón borrar entreno (solo coach)
+    const delBtn = document.createElement('button');
+    delBtn.className = 'sess-del-btn';
+    delBtn.innerHTML = '🗑';
+    delBtn.title = 'Borrar entreno';
+    delBtn.onclick = function(ev) {
+      ev.stopPropagation();
+      const label = DAYS_ES[dt.getDay()] + ' ' + dt.getDate() + ' ' + MONTHS_ES[dt.getMonth()].substring(0,3);
+      showConfirm('¿Borrar el entreno del ' + label + '?', 'Se eliminará la sesión completa (mañana y tarde si las hay). No se puede deshacer.', function() {
+        delBtn.disabled = true; delBtn.innerHTML = '…';
+        dbDeleteSession(s.date).then(function() {
+          delete S.histSessionOpen[s.date];
+          dbGetAllSessions().then(function(rows) {
+            DATA.allSessions = rows;
+            DATA.sessions = {}; rows.forEach(function(x){ DATA.sessions[x.date] = x.data; });
+            render();
+          });
+        });
+      });
+    };
+
+    header.append(dateBlock, info, delBtn, arrow);
     header.onclick = function() { S.histSessionOpen[s.date] = !S.histSessionOpen[s.date]; render(); };
     row.appendChild(header);
 
@@ -2216,6 +2303,49 @@ function buildCoachInscripcions() {
   S.inscCompId = comp.id;
   if (comps.length > 1) d.appendChild(inscCompSelector(comps, comp.id, function(id){ S.inscCompId = id; render(); }));
   d.appendChild(inscCompCard(comp));
+
+  // Controles de override de ventana (abrir ya / cerrar ya)
+  const st = inscWinStatus(comp);
+  const ctrl = document.createElement('div');
+  ctrl.className = 'insc-ctrl';
+  const openBtn = document.createElement('button');
+  openBtn.className = 'open-btn';
+  openBtn.textContent = '🟢 Abrir inscripción';
+  openBtn.disabled = (st === 'open');
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'close-btn';
+  closeBtn.textContent = '🔴 Cerrar inscripción';
+  closeBtn.disabled = (st !== 'open');
+  const tdy = todayStr();
+  openBtn.onclick = function() {
+    showConfirm('¿Abrir la inscripción ahora?',
+      'Se abrirá hoy y se mantendrá la fecha de cierre prevista (' + (comp.inscClose ? inscFmtDate(comp.inscClose) : '—') + '). Los nadadores podrán inscribirse de inmediato.',
+      function() {
+        // abre hoy; si el cierre ya pasó o es anterior a hoy, lo empuja 5 días
+        let close = comp.inscClose;
+        if (!close || close < tdy) {
+          const c = new Date(); c.setDate(c.getDate() + 5);
+          close = c.getFullYear()+'-'+String(c.getMonth()+1).padStart(2,'0')+'-'+String(c.getDate()).padStart(2,'0');
+        }
+        dbSetInscWindow(comp.id, tdy, close).then(function() {
+          dbGetCompetitions().then(function(cs){ DATA.competitions = cs; render(); });
+        });
+      }, { okText: 'Abrir ahora', okSafe: true });
+  };
+  closeBtn.onclick = function() {
+    showConfirm('¿Cerrar la inscripción ahora?',
+      'Los nadadores ya no podrán inscribirse ni modificar sus pruebas. Podrás reabrirla manualmente si hace falta.',
+      function() {
+        // cierra ayer para que current_date > insc_close
+        const y = new Date(); y.setDate(y.getDate() - 1);
+        const yest = y.getFullYear()+'-'+String(y.getMonth()+1).padStart(2,'0')+'-'+String(y.getDate()).padStart(2,'0');
+        dbSetInscWindow(comp.id, comp.inscOpen, yest).then(function() {
+          dbGetCompetitions().then(function(cs){ DATA.competitions = cs; render(); });
+        });
+      }, { okText: 'Cerrar ahora' });
+  };
+  ctrl.append(openBtn, closeBtn);
+  d.appendChild(ctrl);
 
   const rows = inscForComp(comp.id);
   const athletes = DATA.athletes;
