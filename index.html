@@ -223,7 +223,40 @@
   .greyed { opacity: 0.4; }
   .note-field { margin-top: 10px; }
   input[type=number]::-webkit-inner-spin-button { opacity: 0.5; }
+
+  /* ── INSCRIPCIONS ── */
+  .insc-deadline { margin-top:10px; display:inline-flex; align-items:center; gap:8px; background:rgba(243,156,18,0.12); border:1px solid rgba(243,156,18,0.4); color:var(--yellow); font-size:0.75rem; font-weight:600; padding:6px 12px; border-radius:20px; }
+  .insc-deadline.win-before { background:rgba(52,152,219,0.1); border-color:var(--border); color:var(--text2); }
+  .insc-deadline.win-after { background:rgba(231,76,60,0.1); border-color:rgba(231,76,60,0.4); color:var(--red2); }
+  .insc-counter { font-size:0.8rem; font-weight:700; color:var(--accent2); background:rgba(52,152,219,0.12); border:1px solid var(--border); padding:5px 12px; border-radius:20px; }
+  .insc-counter.full { color:var(--red2); border-color:rgba(231,76,60,0.5); background:rgba(231,76,60,0.1); }
+  .stroke-label { font-size:0.7rem; letter-spacing:2px; text-transform:uppercase; color:var(--text2); font-weight:700; margin:14px 0 8px; display:flex; align-items:center; gap:8px; }
+  .stroke-label::after { content:''; flex:1; height:1px; background:var(--border); }
+  .insc-chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .insc-chip { background:var(--surface); border:1px solid var(--border); color:var(--text2); padding:11px 16px; border-radius:12px; font-size:0.9rem; font-weight:600; cursor:pointer; transition:all 0.15s; user-select:none; }
+  .insc-chip:active { transform:scale(0.95); }
+  .insc-chip.sel { background:var(--accent); border-color:var(--accent2); color:#fff; box-shadow:0 4px 14px rgba(41,128,185,0.4); }
+  .insc-chip.sel::before { content:'\2713 '; font-weight:800; }
+  .insc-chip.dis { opacity:0.35; pointer-events:none; }
+  .insc-matrix-wrap { background:var(--surface); border:1px solid var(--border); border-radius:14px; overflow:hidden; margin:14px 0; }
+  .insc-matrix-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  .insc-matrix { border-collapse:collapse; width:max-content; min-width:100%; font-size:0.78rem; }
+  .insc-matrix th, .insc-matrix td { padding:9px 10px; text-align:center; white-space:nowrap; border-bottom:1px solid rgba(41,128,185,0.12); }
+  .insc-matrix thead th { background:var(--surface2); color:var(--text2); font-size:0.6rem; letter-spacing:0.5px; text-transform:uppercase; }
+  .insc-matrix th.iname, .insc-matrix td.iname { position:sticky; left:0; background:var(--surface2); text-align:left; font-weight:700; font-size:0.73rem; z-index:2; min-width:120px; box-shadow:2px 0 6px rgba(0,0,0,0.35); }
+  .insc-matrix td.iname { background:var(--surface); }
+  .insc-matrix .ix { color:var(--accent2); font-weight:800; }
+  .insc-matrix tfoot td { background:var(--surface2); color:var(--gold); font-weight:800; font-size:0.7rem; border-top:1px solid var(--border); }
+  .insc-stat-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin:12px 0; }
+  .insc-stat { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:12px 8px; text-align:center; }
+  .insc-stat b { display:block; font-size:1.3rem; color:var(--accent2); }
+  .insc-stat.gold b { color:var(--gold); }
+  .insc-stat span { font-size:0.6rem; letter-spacing:1px; text-transform:uppercase; color:var(--text2); font-weight:600; }
+  .insc-comp-sel { display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; margin-bottom:10px; }
+  .insc-comp-sel button { flex:0 0 auto; background:var(--surface); border:1px solid var(--border); color:var(--text2); padding:8px 14px; border-radius:10px; font-size:0.78rem; font-weight:600; cursor:pointer; }
+  .insc-comp-sel button.on { background:var(--accent); color:#fff; border-color:var(--accent2); }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <div id="app"></div>
@@ -233,9 +266,11 @@
 // SUPABASE CONFIG
 // ============================================================
 const SUPABASE_URL = 'https://skblkxwaxnefycgrqeyt.supabase.co';
-const SUPABASE_KEY = 'sb_secret_m0t3DLg-Aqb1vgfIHDS9Gw_DX16EnjP';
+const SUPABASE_KEY = 'sb_publishable_Wc-Lo4L8ZPZ_OOg1F8iVVg_vWPEabtn'; // clave pública (terrassanatacio) — diseñada para ir en el cliente
 
+let SB_STATUS = 'ok'; // 'ok' | 'nokey' | 'auth' | 'offline'
 async function sbFetch(path, options) {
+  if (SUPABASE_KEY.indexOf('PEGA_AQUI') === 0) { SB_STATUS = 'nokey'; return null; }
   const url = SUPABASE_URL + '/rest/v1/' + path;
   const headers = {
     'apikey': SUPABASE_KEY,
@@ -243,10 +278,33 @@ async function sbFetch(path, options) {
     'Content-Type': 'application/json',
     'Prefer': options && options.prefer ? options.prefer : 'return=representation'
   };
-  const res = await fetch(url, { ...options, headers: { ...headers, ...(options && options.headers || {}) } });
-  if (!res.ok) { const err = await res.text(); console.error('SB error', path, err); return null; }
-  const text = await res.text();
-  return text ? JSON.parse(text) : null;
+  try {
+    const res = await fetch(url, { ...options, headers: { ...headers, ...(options && options.headers || {}) } });
+    if (!res.ok) {
+      const err = await res.text(); console.error('SB error', path, err);
+      if (res.status === 401 || res.status === 403) SB_STATUS = 'auth';
+      return null;
+    }
+    SB_STATUS = 'ok';
+    const text = await res.text();
+    return text ? JSON.parse(text) : null;
+  } catch (e) {
+    console.error('SB sin conexión', path, e.message);
+    SB_STATUS = 'offline';
+    return null;
+  }
+}
+function buildSbBanner() {
+  if (SB_STATUS === 'ok') return null;
+  const msgs = {
+    nokey: '⚙️ Falta configurar la clave de Supabase. Abre el archivo y pega tu sb_publishable_ en SUPABASE_KEY.',
+    auth: '🔑 La clave de Supabase no es válida o fue revocada. Revisa SUPABASE_KEY en el archivo.',
+    offline: '📡 Sin conexión con la base de datos. Comprueba tu internet y recarga.'
+  };
+  const b = document.createElement('div');
+  b.style.cssText = 'background:rgba(231,76,60,0.15);border:1px solid rgba(231,76,60,0.5);color:#f0b4ad;padding:12px 16px;border-radius:12px;margin:12px;font-size:0.82rem;line-height:1.4;max-width:480px;align-self:center';
+  b.textContent = msgs[SB_STATUS];
+  return b;
 }
 
 // ── Athlete cache ──────────────────────────────────────────
@@ -274,6 +332,7 @@ async function dbDeleteAthlete(name) {
 
 // ── Sessions ───────────────────────────────────────────────
 let _sessionCache = {};
+let _allSessionsCache = null;
 async function dbGetSession(date) {
   if (_sessionCache[date] !== undefined) return _sessionCache[date];
   const rows = await sbFetch('sessions?date=eq.' + date + '&select=*');
@@ -305,8 +364,10 @@ async function dbSaveSession(date, slot, sessObj) {
   });
   await sbFetch('sessions', { method: 'POST', body: JSON.stringify(body) });
   delete _sessionCache[date];
+  _allSessionsCache = null;
 }
 async function dbGetAllSessions() {
+  if (_allSessionsCache) return _allSessionsCache;
   const rows = await sbFetch('sessions?select=*&order=date.desc');
   if (!rows) return [];
   // Group by date
@@ -316,11 +377,35 @@ async function dbGetAllSessions() {
     const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, alphaPhase: r.alpha_phase };
     byDate[r.date][r.slot] = sess;
   });
-  return Object.entries(byDate).map(([date, data]) => ({ date, data })).sort((a,b) => b.date.localeCompare(a.date));
+  _allSessionsCache = Object.entries(byDate).map(([date, data]) => ({ date, data })).sort((a,b) => b.date.localeCompare(a.date));
+  return _allSessionsCache;
 }
 
 // ── RPE ────────────────────────────────────────────────────
 let _rpeCache = {};
+let _rpeRangeLoaded = false;
+async function dbGetRPERange(days) {
+  // 1 sola petición para los últimos N días, agrupada por fecha en cliente
+  const from = new Date(); from.setDate(from.getDate() - (days - 1));
+  const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
+  const rows = await sbFetch('rpe_entries?date=gte.' + fromS + '&select=*,athletes(name)&order=date');
+  const byDate = {};
+  (rows || []).forEach(r => {
+    const name = r.athletes?.name;
+    if (!name) return;
+    if (!byDate[r.date]) byDate[r.date] = {};
+    if (!byDate[r.date][name]) byDate[r.date][name] = { am: null, pm: null };
+    byDate[r.date][name][r.slot] = { rpe: r.rpe, fatigue: r.fatigue, note: r.note, ts: new Date(r.created_at).getTime() };
+  });
+  // rellenar caché completa del rango (días sin datos = {})
+  for (let i = 0; i < days; i++) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const ds = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    _rpeCache[ds] = byDate[ds] || {};
+  }
+  _rpeRangeLoaded = true;
+  return _rpeCache;
+}
 async function dbGetDayRPE(date) {
   if (_rpeCache[date]) return _rpeCache[date];
   const rows = await sbFetch('rpe_entries?date=eq.' + date + '&select=*,athletes(name)');
@@ -346,6 +431,7 @@ async function dbSaveRPE(date, slot, athleteName, rpe, fatigue, note) {
     body: JSON.stringify({ athlete_id: athleteId, date, slot, rpe, fatigue, note: note || '' })
   });
   delete _rpeCache[date];
+  _rpeRangeLoaded = false;
 }
 async function dbGetAthleteHist(name) {
   const athleteId = await dbAthleteId(name);
@@ -357,6 +443,7 @@ async function dbGetAthleteHist(name) {
 // ── Comments ───────────────────────────────────────────────
 let _commentCache = null;
 async function dbGetComments() {
+  if (_commentCache) return _commentCache;
   const rows = await sbFetch('comments?select=*,athletes(name)');
   if (!rows) return {};
   const result = {};
@@ -386,7 +473,8 @@ async function dbGetCompetitions() {
   const rows = await sbFetch('competitions?select=*&order=start_date');
   _compCache = (rows || []).map(r => ({
     id: r.id, name: r.name, start: r.start_date, end: r.end_date,
-    location: r.location, type: r.type
+    location: r.location, type: r.type,
+    inscOpen: r.insc_open, inscClose: r.insc_close, maxEvents: r.max_events || 4
   }));
   return _compCache;
 }
@@ -400,6 +488,31 @@ async function dbAddCompetition(comp) {
 async function dbDeleteCompetition(id) {
   await sbFetch('competitions?id=eq.' + id, { method: 'DELETE', prefer: 'return=minimal' });
   _compCache = null;
+}
+
+// ── Inscripciones ──────────────────────────────────────────
+let _eventsCache = null;
+async function dbGetEvents() {
+  if (_eventsCache) return _eventsCache;
+  const rows = await sbFetch('events?select=code,stroke,distance,pool&order=sort_order');
+  _eventsCache = rows || [];
+  return _eventsCache;
+}
+let _inscCache = null;
+async function dbGetInscriptions() {
+  if (_inscCache) return _inscCache;
+  const rows = await sbFetch('inscriptions?select=competition_id,athlete_id,event_code');
+  _inscCache = rows || [];
+  return _inscCache;
+}
+async function dbSaveInscription(compId, athleteId, eventCodes) {
+  _inscCache = null;
+  // borra las del nadador en esa comp y reinserta la selección
+  await sbFetch('inscriptions?competition_id=eq.' + compId + '&athlete_id=eq.' + athleteId, { method:'DELETE', prefer:'return=minimal' });
+  if (eventCodes.length === 0) return { ok: true };
+  const body = eventCodes.map(function(ev){ return { competition_id: compId, athlete_id: athleteId, event_code: ev }; });
+  const res = await sbFetch('inscriptions', { method:'POST', body: JSON.stringify(body) });
+  return res ? { ok: true } : { ok: false };
 }
 
 // ── Loading state ──────────────────────────────────────────
@@ -461,6 +574,10 @@ let S = {
   mainSet: '',
   coolDown: '',
   packDays: 1,
+  // inscripciones
+  inscCompId: null,    // comp seleccionada en el tab
+  inscSel: [],         // pruebas marcadas (athlete, edición local)
+  inscSelComp: null,   // comp a la que pertenece inscSel
   // calendar
   calYear: new Date().getFullYear(),
   calMonth: new Date().getMonth(),
@@ -496,6 +613,8 @@ const DATA = {
   rpe: {},      // date -> {athleteName: {am,pm}}
   comments: {}, // "date_name" -> text
   competitions: [],
+  events: [],
+  inscriptions: [],
   athleteHist: {} // name -> [{date,slot,rpe,fatigue}]
 };
 
@@ -508,40 +627,31 @@ function getComments() { return DATA.comments; }
 function getCompetitions() { return DATA.competitions; }
 
 async function loadData() {
-  // Load athletes
-  const athletes = await dbGetAthletes();
-  DATA.athletes = athletes;
-
-  // Load all sessions
-  DATA.allSessions = await dbGetAllSessions();
-  DATA.sessions = {};
-  DATA.allSessions.forEach(s => { DATA.sessions[s.date] = s.data; });
-
-  // Load RPE for last 30 days
-  const today = new Date();
-  const promises = [];
-  for (let i = 0; i < 30; i++) {
-    const d = new Date(today); d.setDate(d.getDate() - i);
-    const ds = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
-    promises.push(dbGetDayRPE(ds).then(rpe => { DATA.rpe[ds] = rpe; }));
-  }
-  await Promise.all(promises);
-
-  // Load comments
-  DATA.comments = await dbGetComments();
-
-  // Load competitions
-  DATA.competitions = await dbGetCompetitions();
-
-  // Load hist for current athlete if logged in
+  // Carga en paralelo: 7 peticiones máximo (antes ~35 en cascada).
+  // Las cachés evitan refetch de lo que no cambió tras una acción.
+  const tasks = [
+    dbGetAthletes().then(a => { DATA.athletes = a; }),
+    dbGetAllSessions().then(s => {
+      DATA.allSessions = s;
+      DATA.sessions = {};
+      s.forEach(x => { DATA.sessions[x.date] = x.data; });
+    }),
+    (_rpeRangeLoaded ? Promise.resolve() : dbGetRPERange(30)).then(() => { DATA.rpe = _rpeCache; }),
+    dbGetComments().then(c => { DATA.comments = c; }),
+    dbGetCompetitions().then(c => { DATA.competitions = c; }),
+    dbGetEvents().then(e => { DATA.events = e; }),
+    dbGetInscriptions().then(i => { DATA.inscriptions = i; })
+  ];
   if (S.athleteName) {
-    DATA.athleteHist[S.athleteName] = await dbGetAthleteHist(S.athleteName);
+    tasks.push(dbGetAthleteHist(S.athleteName).then(h => { DATA.athleteHist[S.athleteName] = h; }));
   }
+  await Promise.all(tasks);
 }
 
 async function renderAsync() {
   showLoading();
-  await loadData();
+  try { await loadData(); }
+  catch (e) { console.error('loadData falló', e); }
   render();
 }
 
@@ -682,6 +792,9 @@ function render() {
   const app = document.getElementById('app');
   app.innerHTML = '';
 
+  const sbBanner = buildSbBanner();
+  if (sbBanner) app.appendChild(sbBanner);
+
   if (!S.role) { app.appendChild(buildLogin()); return; }
   if (S.role === 'pin') { app.appendChild(buildPin()); return; }
 
@@ -690,14 +803,14 @@ function render() {
   content.className = 'content';
 
   if (S.role === 'coach') {
-    const tabs = ['Sesión','RPE','Calend.','Equipo','Historial'];
+    const tabs = ['Sesión','RPE','Calend.','Inscr.','Equipo','Historial'];
     content.appendChild(buildTabs(tabs, S.tab, i => { S.tab = i; render(); }));
-    const views = [buildCoachSession, buildCoachRPE, buildCalendar, buildCoachTeam, buildCoachHistorial];
+    const views = [buildCoachSession, buildCoachRPE, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial];
     content.appendChild(views[S.tab]());
   } else {
-    const tabs = ['Inicio','Mi RPE','Calend.','Stats'];
+    const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Stats'];
     content.appendChild(buildTabs(tabs, S.ath_tab, i => { S.ath_tab = i; render(); }));
-    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteStats];
+    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteInscripcions, buildAthleteStats];
     content.appendChild(views[S.ath_tab]());
   }
 
@@ -865,6 +978,7 @@ function buildBottomNav() {
       {icon:'📋',label:'Sesión'},
       {icon:'📊',label:'RPE'},
       {icon:'📅',label:'Calend.'},
+      {icon:'🏁',label:'Inscr.'},
       {icon:'👥',label:'Equipo'},
       {icon:'📁',label:'Historial'}
     ];
@@ -880,6 +994,7 @@ function buildBottomNav() {
       {icon:'🏠',label:'Inicio'},
       {icon:'💪',label:'Mi RPE'},
       {icon:'📅',label:'Calend.'},
+      {icon:'🏁',label:'Inscr.'},
       {icon:'📈',label:'Stats'}
     ];
     items.forEach((item, i) => {
@@ -1916,6 +2031,261 @@ function buildAthleteStats() {
 // ============================================================
 // COMMENT BOTTOM SHEET
 // ============================================================
+
+// ============================================================
+// INSCRIPCIONS — helpers
+// ============================================================
+function inscWinStatus(comp) {
+  const t = todayStr();
+  if (!comp.inscOpen || !comp.inscClose) return 'before';
+  if (t < comp.inscOpen) return 'before';
+  if (t > comp.inscClose) return 'after';
+  return 'open';
+}
+function inscFmtDate(ds) {
+  const d = dateObj(ds);
+  return d.getDate() + ' ' + MONTHS_ES[d.getMonth()].toLowerCase().slice(0,3);
+}
+function inscEligibleComps() {
+  const t = todayStr();
+  return getCompetitions().filter(function(c){ return c.end >= t; });
+}
+function inscStrokeGroups() {
+  const groups = [];
+  DATA.events.forEach(function(ev){
+    let g = groups.find(function(x){ return x.stroke === ev.stroke; });
+    if (!g) { g = { stroke: ev.stroke, events: [] }; groups.push(g); }
+    g.events.push(ev);
+  });
+  return groups;
+}
+function inscForComp(compId) {
+  return DATA.inscriptions.filter(function(i){ return i.competition_id === compId; });
+}
+function inscBanner(comp) {
+  const st = inscWinStatus(comp);
+  const div = document.createElement('div');
+  if (st === 'open') {
+    const left = Math.ceil((dateObj(comp.inscClose) - new Date()) / 86400000) + 1;
+    div.className = 'insc-deadline';
+    div.textContent = '⏳ Inscripción abierta · cierra el ' + inscFmtDate(comp.inscClose) + ' (' + Math.max(left,1) + (left===1?' día':' días') + ')';
+  } else if (st === 'before') {
+    div.className = 'insc-deadline win-before';
+    div.textContent = '🔒 Se abre el ' + inscFmtDate(comp.inscOpen);
+  } else {
+    div.className = 'insc-deadline win-after';
+    div.textContent = '🔒 Inscripción cerrada el ' + inscFmtDate(comp.inscClose);
+  }
+  return div;
+}
+function inscCompCard(comp) {
+  const card = document.createElement('div');
+  card.className = 'welcome-card';
+  card.innerHTML = '<div style="font-size:0.65rem;letter-spacing:2px;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:6px">' + (comp.type || 'Competición') + '</div>'
+    + '<div style="font-size:1.15rem;font-weight:700;line-height:1.25">' + comp.name + '</div>'
+    + '<div style="font-size:0.8rem;color:var(--text2);margin-top:6px">📍 ' + (comp.location || '—') + ' &nbsp; 📅 ' + inscFmtDate(comp.start) + ' – ' + inscFmtDate(comp.end) + '</div>';
+  card.appendChild(inscBanner(comp));
+  return card;
+}
+function inscCompSelector(comps, activeId, onPick) {
+  const sel = document.createElement('div');
+  sel.className = 'insc-comp-sel';
+  comps.forEach(function(c){
+    const b = document.createElement('button');
+    b.textContent = c.name.length > 22 ? c.name.slice(0,22) + '…' : c.name;
+    if (c.id === activeId) b.className = 'on';
+    b.onclick = function(){ onPick(c.id); };
+    sel.appendChild(b);
+  });
+  return sel;
+}
+
+// ============================================================
+// ATHLETE: INSCRIPCIONS
+// ============================================================
+function buildAthleteInscripcions() {
+  const d = document.createElement('div');
+  const comps = inscEligibleComps();
+
+  if (comps.length === 0) {
+    d.innerHTML = '<div class="empty-state">No hay competiciones próximas.<br>Cuando el entrenador añada una al calendario, podrás inscribirte aquí.</div>';
+    return d;
+  }
+
+  // comp activa: la elegida o la primera con ventana abierta, si no la más próxima
+  let comp = comps.find(function(c){ return c.id === S.inscCompId; });
+  if (!comp) comp = comps.find(function(c){ return inscWinStatus(c) === 'open'; }) || comps[0];
+  S.inscCompId = comp.id;
+
+  if (comps.length > 1) d.appendChild(inscCompSelector(comps, comp.id, function(id){ S.inscCompId = id; S.inscSelComp = null; render(); }));
+  d.appendChild(inscCompCard(comp));
+
+  const athlete = DATA.athletes.find(function(a){ return a.name === S.athleteName; });
+  if (!athlete) { d.appendChild(Object.assign(document.createElement('div'), { className:'empty-state', textContent:'No se encontró tu ficha de nadador.' })); return d; }
+
+  const mine = inscForComp(comp.id).filter(function(i){ return i.athlete_id === athlete.id; }).map(function(i){ return i.event_code; });
+  const st = inscWinStatus(comp);
+
+  // inicializar selección local desde DB al entrar / cambiar de comp
+  if (S.inscSelComp !== comp.id) { S.inscSel = mine.slice(); S.inscSelComp = comp.id; }
+
+  if (st !== 'open') {
+    const msg = document.createElement('div');
+    msg.className = 'card';
+    msg.style.cssText = 'padding:16px;font-size:0.88rem;color:var(--text2);line-height:1.5';
+    msg.innerHTML = st === 'before'
+      ? 'Todavía no puedes inscribirte. La inscripción se abre <b style="color:var(--text)">20 días antes</b> de la competición y dura <b style="color:var(--text)">5 días</b>.'
+      : 'El plazo ha finalizado. Si necesitas un cambio, habla con el entrenador.';
+    d.appendChild(msg);
+    if (mine.length > 0) {
+      const t = document.createElement('div'); t.className = 'section-title'; t.style.marginTop = '14px'; t.textContent = 'TUS PRUEBAS INSCRITAS';
+      d.appendChild(t);
+      mine.forEach(function(ev){
+        const r = document.createElement('div');
+        r.className = 'card';
+        r.style.cssText = 'padding:12px 16px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-weight:600;font-size:0.9rem';
+        r.innerHTML = '<span>' + ev + '</span><span style="color:var(--green);font-weight:800">✓</span>';
+        d.appendChild(r);
+      });
+    }
+    return d;
+  }
+
+  // ── ventana abierta: chips ──
+  const maxEv = comp.maxEvents || 4;
+  const head = document.createElement('div');
+  head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:14px 0 4px';
+  head.innerHTML = '<div style="font-size:0.95rem;font-weight:700">Elige tus pruebas</div>';
+  const cnt = document.createElement('span');
+  cnt.className = 'insc-counter' + (S.inscSel.length >= maxEv ? ' full' : '');
+  cnt.textContent = S.inscSel.length + ' / ' + maxEv;
+  head.appendChild(cnt);
+  d.appendChild(head);
+
+  inscStrokeGroups().forEach(function(g){
+    const lbl = document.createElement('div'); lbl.className = 'stroke-label'; lbl.textContent = g.stroke;
+    d.appendChild(lbl);
+    const chips = document.createElement('div'); chips.className = 'insc-chips';
+    g.events.forEach(function(ev){
+      const isSel = S.inscSel.indexOf(ev.code) !== -1;
+      const c = document.createElement('div');
+      c.className = 'insc-chip' + (isSel ? ' sel' : '') + (!isSel && S.inscSel.length >= maxEv ? ' dis' : '');
+      c.textContent = ev.distance;
+      c.onclick = function(){
+        const idx = S.inscSel.indexOf(ev.code);
+        if (idx !== -1) S.inscSel.splice(idx, 1);
+        else if (S.inscSel.length < maxEv) S.inscSel.push(ev.code);
+        render();
+      };
+      chips.appendChild(c);
+    });
+    d.appendChild(chips);
+  });
+
+  const changed = mine.slice().sort().join('|') !== S.inscSel.slice().sort().join('|');
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-primary';
+  btn.style.cssText = 'width:100%;margin-top:18px;padding:15px;font-size:1rem;font-weight:700;border-radius:12px';
+  btn.textContent = changed ? 'Enviar inscripción' : (mine.length > 0 ? '✓ Inscripción enviada' : 'Enviar inscripción');
+  if (!changed && mine.length > 0) { btn.style.background = 'var(--green)'; btn.style.color = '#fff'; }
+  btn.onclick = function(){
+    if (S.inscSel.length === 0 && mine.length === 0) { btn.textContent = 'Elige al menos una prueba'; setTimeout(function(){ btn.textContent = 'Enviar inscripción'; }, 1600); return; }
+    btn.disabled = true; btn.textContent = 'Guardando…';
+    dbSaveInscription(comp.id, athlete.id, S.inscSel).then(function(res){
+      if (!res.ok) { btn.disabled = false; btn.textContent = 'Error — reintenta'; return; }
+      dbGetInscriptions().then(function(rows){ DATA.inscriptions = rows; render(); });
+    });
+  };
+  d.appendChild(btn);
+  return d;
+}
+
+// ============================================================
+// COACH: INSCRIPCIONS
+// ============================================================
+function buildCoachInscripcions() {
+  const d = document.createElement('div');
+  const comps = inscEligibleComps();
+
+  if (comps.length === 0) {
+    d.innerHTML = '<div class="empty-state">No hay competiciones próximas.<br>Añade una en el calendario: la ventana de inscripción se calcula sola (abre 20 días antes, dura 5).</div>';
+    return d;
+  }
+
+  let comp = comps.find(function(c){ return c.id === S.inscCompId; }) || comps[0];
+  S.inscCompId = comp.id;
+  if (comps.length > 1) d.appendChild(inscCompSelector(comps, comp.id, function(id){ S.inscCompId = id; render(); }));
+  d.appendChild(inscCompCard(comp));
+
+  const rows = inscForComp(comp.id);
+  const athletes = DATA.athletes;
+  const byAthlete = {};
+  rows.forEach(function(i){ (byAthlete[i.athlete_id] = byAthlete[i.athlete_id] || []).push(i.event_code); });
+  const doneCount = athletes.filter(function(a){ return (byAthlete[a.id] || []).length > 0; }).length;
+  const usedEvents = DATA.events.filter(function(ev){ return rows.some(function(i){ return i.event_code === ev.code; }); }).length;
+
+  const stats = document.createElement('div');
+  stats.className = 'insc-stat-row';
+  stats.innerHTML = '<div class="insc-stat"><b>' + doneCount + '/' + athletes.length + '</b><span>Nadadores</span></div>'
+    + '<div class="insc-stat"><b>' + rows.length + '</b><span>Inscripciones</span></div>'
+    + '<div class="insc-stat gold"><b>' + usedEvents + '/' + DATA.events.length + '</b><span>Pruebas cubiertas</span></div>';
+  d.appendChild(stats);
+
+  // matriz
+  const wrap = document.createElement('div'); wrap.className = 'insc-matrix-wrap';
+  const scroll = document.createElement('div'); scroll.className = 'insc-matrix-scroll';
+  let h = '<table class="insc-matrix"><thead><tr><th class="iname">Nadador</th>';
+  DATA.events.forEach(function(ev){ h += '<th>' + ev.code.replace(' ', '<br>') + '</th>'; });
+  h += '<th>Σ</th></tr></thead><tbody>';
+  athletes.forEach(function(a){
+    const evs = byAthlete[a.id] || [];
+    h += '<tr><td class="iname">' + a.name + '</td>';
+    DATA.events.forEach(function(ev){ h += '<td>' + (evs.indexOf(ev.code) !== -1 ? '<span class="ix">✕</span>' : '') + '</td>'; });
+    h += '<td style="font-weight:700;color:' + (evs.length ? 'var(--green)' : 'var(--text2)') + '">' + (evs.length || '—') + '</td></tr>';
+  });
+  h += '</tbody><tfoot><tr><td class="iname" style="color:var(--gold)">Por prueba</td>';
+  DATA.events.forEach(function(ev){
+    const c = rows.filter(function(i){ return i.event_code === ev.code; }).length;
+    h += '<td' + (c === 0 ? ' style="color:var(--red2);opacity:0.85"' : '') + '>' + c + '</td>';
+  });
+  h += '<td>' + rows.length + '</td></tr></tfoot></table>';
+  scroll.innerHTML = h;
+  wrap.appendChild(scroll);
+
+  const pending = athletes.filter(function(a){ return (byAthlete[a.id] || []).length === 0; });
+  if (pending.length > 0) {
+    const p = document.createElement('div');
+    p.style.cssText = 'font-size:0.72rem;color:var(--text2);padding:10px 14px;border-top:1px solid rgba(41,128,185,0.12)';
+    p.innerHTML = '⚠ Pendientes: <b style="color:var(--yellow)">' + pending.map(function(a){ return a.name; }).join(', ') + '</b>';
+    wrap.appendChild(p);
+  }
+  d.appendChild(wrap);
+
+  // export
+  const xbtn = document.createElement('button');
+  xbtn.className = 'btn';
+  xbtn.style.cssText = 'width:100%;padding:15px;font-size:1rem;font-weight:700;border-radius:12px;border:none;background:var(--gold);color:#0a1628;cursor:pointer';
+  xbtn.textContent = '⬇ Exportar Excel (.xlsx)';
+  xbtn.onclick = function(){
+    const header = ['PRUEBA / Nadador'].concat(DATA.events.map(function(e){ return e.code; }));
+    const body = athletes.map(function(a){
+      const evs = byAthlete[a.id] || [];
+      return [a.name].concat(DATA.events.map(function(e){ return evs.indexOf(e.code) !== -1 ? 'X' : ''; }));
+    });
+    const foot = ['TOTAL por prueba'].concat(DATA.events.map(function(e){ return rows.filter(function(i){ return i.event_code === e.code; }).length; }));
+    const ws = XLSX.utils.aoa_to_sheet([header].concat(body, [foot]));
+    ws['!cols'] = [{wch:20}].concat(DATA.events.map(function(){ return {wch:10}; }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Inscripciones');
+    XLSX.writeFile(wb, 'inscripciones_' + comp.name.toLowerCase().replace(/[^a-z0-9]+/g, '_') + '.xlsx');
+    xbtn.textContent = '✓ Excel descargado';
+    setTimeout(function(){ xbtn.textContent = '⬇ Exportar Excel (.xlsx)'; }, 2000);
+  };
+  d.appendChild(xbtn);
+  return d;
+}
+
+
 function buildCommentSheet() {
   const dateKey = S.commentDate || todayStr();
   const overlay = document.createElement('div'); overlay.className='overlay open';
