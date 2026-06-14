@@ -269,6 +269,11 @@
   .insc-comp-sel button.on { background:var(--accent); color:#fff; border-color:var(--accent2); }
 
   /* ── Modal confirmación ── */
+  .acwr-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:10px; }
+  .acwr-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:10px 6px; text-align:center; }
+  .acwr-name { font-size:0.72rem; font-weight:700; color:var(--text); margin-bottom:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .acwr-val { font-size:1.1rem; font-weight:800; line-height:1.1; }
+  .acwr-lbl { font-size:0.6rem; letter-spacing:0.5px; text-transform:uppercase; font-weight:700; margin-top:2px; }
   .confirm-back { position:fixed; inset:0; background:rgba(4,16,31,0.78); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:200; padding:24px; animation:fadeIn 0.15s ease; }
   .confirm-box { background:var(--surface2); border:1px solid var(--border); border-radius:18px; padding:24px 22px; max-width:380px; width:100%; box-shadow:0 20px 60px rgba(0,0,0,0.5); animation:popIn 0.18s ease; }
   .confirm-title { font-size:1.05rem; font-weight:700; color:var(--text); margin-bottom:8px; }
@@ -1410,23 +1415,44 @@ function buildCoachRPE() {
     d.appendChild(sr);
   }
 
+  // ── Panel ACWR (carga aguda:crónica por nadador) ──
+  const acwrData = athletes.map(function(name) {
+    return { name: name, raw: calcACWR(name), info: acwrLabel(calcACWR(name)) };
+  }).filter(function(x){ return x.info !== null; });
+
+  if (acwrData.length > 0) {
+    const at = document.createElement('div'); at.className = 'section-title'; at.textContent = 'CARGA · ACWR';
+    d.appendChild(at);
+    const grid = document.createElement('div'); grid.className = 'acwr-grid';
+    acwrData.forEach(function(x) {
+      const isCal = x.info.calibrating;
+      const val = isCal ? x.info.icon : (x.info.icon + ' ' + x.raw);
+      const card = document.createElement('div');
+      card.className = 'acwr-card';
+      card.style.borderColor = x.info.color + '55';
+      card.innerHTML = '<div class="acwr-name">' + x.name.split(' ')[0] + '</div>'
+        + '<div class="acwr-val" style="color:' + x.info.color + '">' + val + '</div>'
+        + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + x.info.label + '</div>';
+      grid.appendChild(card);
+    });
+    d.appendChild(grid);
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin:-4px 0 4px;padding:0 2px';
+    note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5. "Calibrando" = faltan semanas de datos.';
+    d.appendChild(note);
+  }
+
   // RPE Table
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'HOY — ' + formatDateLabel(today).toUpperCase();
   d.appendChild(st);
 
   const tbl = document.createElement('table'); tbl.className = 'rpe-table';
-  tbl.innerHTML = '<thead><tr><th>Atleta</th><th>RPE</th><th>Estado</th><th>Δ</th><th>ACWR</th><th></th></tr></thead>';
+  tbl.innerHTML = '<thead><tr><th>Atleta</th><th>RPE</th><th>Estado</th><th>Δ</th><th></th></tr></thead>';
   const tbody = document.createElement('tbody');
   athletes.forEach(name => {
     const entry = dayRPE[name];
     const tr = document.createElement('tr');
     const nameShort = name.split(' ')[0];
-    const acwr = calcACWR(name);
-    const acwrInfo = acwrLabel(acwr);
-    const acwrText = (acwrInfo && acwrInfo.calibrating) ? acwrInfo.label : acwr;
-    const acwrCell = acwrInfo
-      ? '<span style="font-size:0.72rem;font-weight:700;color:' + acwrInfo.color + '" title="' + (acwrInfo.calibrating ? 'Necesita ~3 semanas de datos' : 'ACWR ' + acwr) + '">' + acwrInfo.icon + ' ' + acwrText + '</span>'
-      : '<span style="color:var(--text2);font-size:0.72rem">—</span>';
     if (entry) {
       const subs = rpeSubmissions(entry);
       const circles = subs.map(function(sub) {
@@ -1448,11 +1474,10 @@ function buildCoachRPE() {
         <td>${circles}</td>
         <td><span class="fatigue-label" style="background:${fat.color}22;color:${fat.color}">${fat.label}</span></td>
         <td><span class="delta ${deltaClass}">${deltaStr}</span></td>
-        <td>${acwrCell}</td>
         <td><button class="comment-btn" data-ath="${name}">${getComments()[today+'_'+name] ? '💬' : '✏️'}</button></td>
       `;
     } else {
-      tr.innerHTML = '<td>' + nameShort + '</td><td colspan="2" style="color:var(--text2);font-size:0.8rem">Sin respuesta</td><td></td><td>' + acwrCell + '</td><td><button class="comment-btn" data-ath="' + name + '">✏️</button></td>';
+      tr.innerHTML = '<td>' + nameShort + '</td><td colspan="2" style="color:var(--text2);font-size:0.8rem">Sin respuesta</td><td></td><td><button class="comment-btn" data-ath="' + name + '">✏️</button></td>';
     }
     tbody.appendChild(tr);
   });
