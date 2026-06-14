@@ -904,12 +904,18 @@ function calcACWR(athleteName) {
     });
     const chronicWeekly = chronic / 4;
     if (chronicWeekly === 0) return null;
+    // Días distintos con carga en la ventana crónica (28d). El ACWR no es
+    // fiable hasta tener ~3 semanas de historia: antes, la ventana crónica
+    // está casi vacía y el ratio sale artificialmente alto.
+    const diasConCarga = Object.keys(loadByDay).length;
+    if (diasConCarga < 14) return { calibrating: true, days: diasConCarga };
     // 3) Ratio agudo:crónico (umbrales Gabbett 0.8–1.3 válidos con esta fórmula)
     return Math.round((acute / chronicWeekly) * 100) / 100;
   } catch(e) { return null; }
 }
 function acwrLabel(ratio) {
   if (ratio === null) return null;
+  if (typeof ratio === 'object' && ratio.calibrating) return { label: 'Calibrando', color: '#a8bfd4', icon: '○', calibrating: true };
   if (ratio < 0.8)  return { label: 'Subcarga', color: '#3498db', icon: '↓' };
   if (ratio <= 1.3) return { label: 'Óptimo',   color: '#27ae60', icon: '✓' };
   if (ratio <= 1.5) return { label: 'Atención', color: '#f39c12', icon: '⚠' };
@@ -1417,8 +1423,9 @@ function buildCoachRPE() {
     const nameShort = name.split(' ')[0];
     const acwr = calcACWR(name);
     const acwrInfo = acwrLabel(acwr);
+    const acwrText = (acwrInfo && acwrInfo.calibrating) ? acwrInfo.label : acwr;
     const acwrCell = acwrInfo
-      ? '<span style="font-size:0.72rem;font-weight:700;color:' + acwrInfo.color + '" title="ACWR ' + acwr + '">' + acwrInfo.icon + ' ' + acwr + '</span>'
+      ? '<span style="font-size:0.72rem;font-weight:700;color:' + acwrInfo.color + '" title="' + (acwrInfo.calibrating ? 'Necesita ~3 semanas de datos' : 'ACWR ' + acwr) + '">' + acwrInfo.icon + ' ' + acwrText + '</span>'
       : '<span style="color:var(--text2);font-size:0.72rem">—</span>';
     if (entry) {
       const subs = rpeSubmissions(entry);
