@@ -379,7 +379,7 @@ async function dbGetSession(date) {
   // Reconstruct am/pm format
   const result = { am: null, pm: null };
   rows.forEach(r => {
-    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, alphaPhase: r.alpha_phase, _id: r.id };
+    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, duration: r.duration_min, alphaPhase: r.alpha_phase, _id: r.id };
     result[r.slot] = sess;
   });
   _sessionCache[date] = result;
@@ -391,6 +391,7 @@ async function dbSaveSession(date, slot, sessObj) {
     title: sessObj.title || 'Sin título',
     phase: sessObj.phase || 'Ligero',
     target_rpe: sessObj.targetRPE || 6,
+    duration_min: sessObj.duration || 80,
     alpha_phase: sessObj.alphaPhase || null,
     content: {
       warmUp: sessObj.warmUp || '', preSet: sessObj.preSet || '',
@@ -418,7 +419,7 @@ async function dbGetAllSessions(weeks) {
   const byDate = {};
   rows.forEach(r => {
     if (!byDate[r.date]) byDate[r.date] = { am: null, pm: null };
-    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, alphaPhase: r.alpha_phase };
+    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, duration: r.duration_min, alphaPhase: r.alpha_phase };
     byDate[r.date][r.slot] = sess;
   });
   _allSessionsCache = Object.entries(byDate).map(([date, data]) => ({ date, data })).sort((a,b) => b.date.localeCompare(a.date));
@@ -442,7 +443,7 @@ async function dbLoadSessionMonth(ym) {
   const byDate = {};
   rows.forEach(r => {
     if (!byDate[r.date]) byDate[r.date] = { am: null, pm: null };
-    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, alphaPhase: r.alpha_phase };
+    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, duration: r.duration_min, alphaPhase: r.alpha_phase };
     byDate[r.date][r.slot] = sess;
   });
   const existing = {}; (_allSessionsCache || []).forEach(function(s){ existing[s.date] = s; });
@@ -509,7 +510,16 @@ async function dbGetAthleteHist(name) {
   const athleteId = await dbAthleteId(name);
   if (!athleteId) return [];
   const rows = await sbFetch('rpe_entries?athlete_id=eq.' + athleteId + '&select=date,slot,rpe,fatigue&order=date.asc');
-  return rows || [];
+  if (!rows) return [];
+  // Adjuntar duración de la sesión correspondiente (para sRPE = RPE × min).
+  // Las sesiones ya están en DATA.sessions (cargadas por ventana); si falta, default 80.
+  rows.forEach(function(h) {
+    let dur = 80;
+    const day = DATA.sessions && DATA.sessions[h.date];
+    if (day && day[h.slot] && day[h.slot].duration) dur = day[h.slot].duration;
+    h.duration = dur;
+  });
+  return rows;
 }
 
 // ── Comments ───────────────────────────────────────────────
@@ -672,6 +682,7 @@ let S = {
   tab: 0,
   sessionTitle: '',
   sessionRPE: 6,
+  sessionDuration: 80,
   sessionPhase: 'Ligero',
   sessionDate: todayStr(),
   sessionSlot: 'unica', // 'unica' | 'am' | 'pm'
@@ -873,19 +884,28 @@ function calcACWR(athleteName) {
   const hist = DATA.athleteHist[athleteName] || [];
     if (hist.length < 3) return null;
     const today = new Date();
-    let acute = 0, acuteCount = 0;
-    let chronic = 0, chronicCount = 0;
+    // 1) Carga sRPE por entrada (RPE × duración), agrupada por DÍA.
+    //    Un día con doble sesión suma am+pm (carga diaria real).
+    const loadByDay = {};
     hist.forEach(function(h) {
       const d = dateObj(h.date);
       const daysAgo = Math.floor((today - d) / 86400000);
-      if (daysAgo >= 0 && daysAgo < 7)  { acute += h.rpe; acuteCount++; }
-      if (daysAgo >= 0 && daysAgo < 28) { chronic += h.rpe; chronicCount++; }
+      if (daysAgo < 0 || daysAgo >= 28) return;
+      const srpe = h.rpe * (h.duration || 80);
+      loadByDay[h.date] = (loadByDay[h.date] || 0) + srpe;
     });
-    if (chronicCount === 0) return null;
-    const acuteAvg = acuteCount > 0 ? acute / acuteCount : 0;
-    const chronicAvg = chronic / chronicCount;
-    if (chronicAvg === 0) return null;
-    return Math.round((acuteAvg / chronicAvg) * 100) / 100;
+    // 2) Aguda = suma de carga de los últimos 7 días.
+    //    Crónica = media semanal = suma de 28 días / 4.
+    let acute = 0, chronic = 0;
+    Object.keys(loadByDay).forEach(function(date) {
+      const daysAgo = Math.floor((today - dateObj(date)) / 86400000);
+      if (daysAgo < 7) acute += loadByDay[date];
+      chronic += loadByDay[date];
+    });
+    const chronicWeekly = chronic / 4;
+    if (chronicWeekly === 0) return null;
+    // 3) Ratio agudo:crónico (umbrales Gabbett 0.8–1.3 válidos con esta fórmula)
+    return Math.round((acute / chronicWeekly) * 100) / 100;
   } catch(e) { return null; }
 }
 function acwrLabel(ratio) {
@@ -1144,6 +1164,14 @@ function buildCoachSession() {
   rpeIn.oninput = e => { S.sessionRPE = parseInt(e.target.value) || 6; };
   d.appendChild(rpeIn);
 
+  // Duración (min) — para sRPE = RPE × duración
+  const lDur = document.createElement('label'); lDur.className = 'field-label'; lDur.textContent = 'Duración (min)';
+  d.appendChild(lDur);
+  const durIn = document.createElement('input');
+  durIn.type = 'number'; durIn.min = 10; durIn.max = 300; durIn.value = S.sessionDuration;
+  durIn.oninput = e => { S.sessionDuration = parseInt(e.target.value) || 80; };
+  d.appendChild(durIn);
+
   // Phase
   const l3 = document.createElement('label'); l3.className = 'field-label'; l3.textContent = 'Fase';
   d.appendChild(l3);
@@ -1258,7 +1286,7 @@ function buildCoachSession() {
   const clearBtn = document.createElement('button');
   clearBtn.className = 'btn btn-secondary'; clearBtn.textContent = 'Limpiar';
   clearBtn.onclick = () => {
-    S.sessionTitle=''; S.sessionRPE=6; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
+    S.sessionTitle=''; S.sessionRPE=6; S.sessionDuration=80; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
     S.alphaPhase=null; S.pullText=''; S.pushText=''; S.lowerText='';
     S.warmUp=''; S.preSet=''; S.mainSet=''; S.coolDown=''; S.packDays=1;
     render();
@@ -1271,6 +1299,7 @@ function buildCoachSession() {
     const session = {
       title: S.sessionTitle || 'Sin título',
       targetRPE: S.sessionRPE,
+      duration: S.sessionDuration,
       phase: S.sessionPhase,
       alphaPhase: S.alphaPhase,
       pullText: S.pullText,
@@ -1303,7 +1332,7 @@ function buildCoachSession() {
         return; // NO se limpia: el texto se conserva
       }
       // guardado confirmado → limpiar formulario
-      S.sessionTitle=''; S.sessionRPE=6; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
+      S.sessionTitle=''; S.sessionRPE=6; S.sessionDuration=80; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
       S.alphaPhase=null; S.pullText=''; S.pushText=''; S.lowerText='';
       S.warmUp=''; S.preSet=''; S.mainSet=''; S.coolDown=''; S.packDays=1;
       btn.textContent = '✓ Publicado'; btn.style.background = '#27ae60';
