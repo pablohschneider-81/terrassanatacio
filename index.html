@@ -913,9 +913,10 @@ function calcACWR(athleteName) {
     // fiable hasta tener ~3 semanas de historia: antes, la ventana crónica
     // está casi vacía y el ratio sale artificialmente alto.
     const diasConCarga = Object.keys(loadByDay).length;
-    if (diasConCarga < 14) return { calibrating: true, days: diasConCarga };
+    const ratio = Math.round((acute / chronicWeekly) * 100) / 100;
+    if (diasConCarga < 14) return { calibrating: true, days: diasConCarga, value: ratio };
     // 3) Ratio agudo:crónico (umbrales Gabbett 0.8–1.3 válidos con esta fórmula)
-    return Math.round((acute / chronicWeekly) * 100) / 100;
+    return ratio;
   } catch(e) { return null; }
 }
 function acwrLabel(ratio) {
@@ -1426,19 +1427,21 @@ function buildCoachRPE() {
     const grid = document.createElement('div'); grid.className = 'acwr-grid';
     acwrData.forEach(function(x) {
       const isCal = x.info.calibrating;
-      const val = isCal ? x.info.icon : (x.info.icon + ' ' + x.raw);
+      // Mostrar SIEMPRE el número. Si calibra, número provisional con asterisco.
+      const num = isCal ? x.raw.value : x.raw;
+      const val = isCal ? (num + '*') : (x.info.icon + ' ' + num);
       const card = document.createElement('div');
       card.className = 'acwr-card';
       card.style.borderColor = x.info.color + '55';
       card.innerHTML = '<div class="acwr-name">' + x.name.split(' ')[0] + '</div>'
         + '<div class="acwr-val" style="color:' + x.info.color + '">' + val + '</div>'
-        + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + x.info.label + '</div>';
+        + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + (isCal ? 'Provisional' : x.info.label) + '</div>';
       grid.appendChild(card);
     });
     d.appendChild(grid);
     const note = document.createElement('div');
     note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin:-4px 0 4px;padding:0 2px';
-    note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5. "Calibrando" = faltan semanas de datos.';
+    note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5. El * marca valor provisional (faltan ~3 semanas de datos para que sea fiable).';
     d.appendChild(note);
   }
 
