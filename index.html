@@ -398,10 +398,11 @@ async function dbSaveSession(date, slot, sessObj) {
       pullText: sessObj.pullText || '', pushText: sessObj.pushText || '', lowerText: sessObj.lowerText || ''
     }
   };
-  await sbFetch('sessions?date=eq.' + date + '&slot=eq.' + slot, {
-    method: 'DELETE', prefer: 'return=minimal'
+  const res = await sbFetch('sessions?on_conflict=date,slot', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify(body)
   });
-  const res = await sbFetch('sessions', { method: 'POST', body: JSON.stringify(body) });
   delete _sessionCache[date];
   _allSessionsCache = null;
   return res; // null si falló, array si guardó
@@ -492,16 +493,17 @@ async function dbGetDayRPE(date) {
 }
 async function dbSaveRPE(date, slot, athleteName, rpe, fatigue, note) {
   const athleteId = await dbAthleteId(athleteName);
-  if (!athleteId) return;
-  await sbFetch('rpe_entries?athlete_id=eq.' + athleteId + '&date=eq.' + date + '&slot=eq.' + slot, {
-    method: 'DELETE', prefer: 'return=minimal'
-  });
-  await sbFetch('rpe_entries', {
+  if (!athleteId) return null;
+  // Upsert atómico: si ya existe (athlete_id,date,slot) lo actualiza, si no lo crea.
+  // Evita la carrera del DELETE+POST cuando varios escriben a la vez.
+  const res = await sbFetch('rpe_entries?on_conflict=athlete_id,date,slot', {
     method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
     body: JSON.stringify({ athlete_id: athleteId, date, slot, rpe, fatigue, note: note || '' })
   });
   delete _rpeCache[date];
   _rpeRangeLoaded = false;
+  return res;
 }
 async function dbGetAthleteHist(name) {
   const athleteId = await dbAthleteId(name);
@@ -544,14 +546,14 @@ async function dbGetCompetitions() {
   _compCache = (rows || []).map(r => ({
     id: r.id, name: r.name, start: r.start_date, end: r.end_date,
     location: r.location, type: r.type,
-    inscOpen: r.insc_open, inscClose: r.insc_close, maxEvents: r.max_events || 4
+    inscOpen: r.insc_open, inscClose: r.insc_close, maxEvents: r.max_events || 6
   }));
   return _compCache;
 }
 async function dbAddCompetition(comp) {
   await sbFetch('competitions', {
     method: 'POST',
-    body: JSON.stringify({ name: comp.name, start_date: comp.start, end_date: comp.end, location: comp.location || '', type: comp.type || 'Regional' })
+    body: JSON.stringify({ name: comp.name, start_date: comp.start, end_date: comp.end, location: comp.location || '', type: comp.type || 'Regional', max_events: comp.maxEvents || 6 })
   });
   _compCache = null;
 }
@@ -1544,12 +1546,20 @@ function buildCalendar() {
   // Header
   const ch = document.createElement('div'); ch.className = 'cal-header';
   const prev = document.createElement('button'); prev.className = 'cal-nav'; prev.textContent = '‹';
-  prev.onclick = () => { S.calMonth--; if(S.calMonth<0){S.calMonth=11;S.calYear--;} render(); };
+  prev.onclick = () => {
+    S.calMonth--; if(S.calMonth<0){S.calMonth=11;S.calYear--;}
+    const ym = S.calYear + '-' + String(S.calMonth+1).padStart(2,'0');
+    if (!_loadedMonths[ym]) dbLoadSessionMonth(ym).then(render); else render();
+  };
   const mnth = document.createElement('span');
   mnth.style.cssText = 'font-weight:700;font-size:1rem;color:var(--text);';
   mnth.textContent = MONTHS_ES[month] + ' ' + year;
   const next = document.createElement('button'); next.className = 'cal-nav'; next.textContent = '›';
-  next.onclick = () => { S.calMonth++; if(S.calMonth>11){S.calMonth=0;S.calYear++;} render(); };
+  next.onclick = () => {
+    S.calMonth++; if(S.calMonth>11){S.calMonth=0;S.calYear++;}
+    const ym = S.calYear + '-' + String(S.calMonth+1).padStart(2,'0');
+    if (!_loadedMonths[ym]) dbLoadSessionMonth(ym).then(render); else render();
+  };
   ch.append(prev, mnth, next);
   d.appendChild(ch);
 
@@ -1566,7 +1576,7 @@ function buildCalendar() {
 
   // Build date sets
   const sessKeys = new Set();
-  try { for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k&&k.startsWith('tn:session:')) sessKeys.add(k.replace('tn:session:','')); } } catch(e) {}
+  Object.keys(DATA.sessions || {}).forEach(function(ds){ sessKeys.add(ds); });
 
   const compDates = new Map();
   competitions.forEach(c => {
@@ -1692,7 +1702,10 @@ function buildCalendar() {
         setTimeout(function() { btn.textContent = 'Añadir competición'; }, 2000);
         return;
       }
-      dbAddCompetition({ name: name.trim(), start: start, end: end || start, location: loc.trim(), type: type }).then(function() {
+      // Límite de pruebas por nadador según ámbito (ajustable luego por competición)
+      const maxByType = { 'Regional': 3, 'Autonómico': 6, 'Nacional': 8, 'Internacional': 8, 'Otros': 6 };
+      const maxEv = maxByType[type] || 6;
+      dbAddCompetition({ name: name.trim(), start: start, end: end || start, location: loc.trim(), type: type, maxEvents: maxEv }).then(function() {
         renderAsync();
       });
     };
@@ -2099,9 +2112,24 @@ function buildAthleteRPE() {
       alert('Selecciona RPE y estado de fatiga'); return;
     }
     const slotKey = double ? S.rpeSlot : 'am';
-    dbSaveRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote).then(function() {
+    const btnLabel = submitBtn.textContent;
+    submitBtn.disabled = true; submitBtn.textContent = 'Guardando…';
+    dbSaveRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote).then(function(res) {
+      if (!res) {
+        // no se guardó (sin conexión, clave inválida, etc.) — NO confirmar
+        submitBtn.disabled = false;
+        submitBtn.textContent = '⚠ No se guardó — reintenta';
+        submitBtn.style.background = '#e74c3c';
+        setTimeout(function(){ submitBtn.textContent = btnLabel; submitBtn.style.background = ''; }, 2800);
+        return;
+      }
       S.rpeSubmitted = true;
       renderAsync();
+    }).catch(function() {
+      submitBtn.disabled = false;
+      submitBtn.textContent = '⚠ Sin conexión — reintenta';
+      submitBtn.style.background = '#e74c3c';
+      setTimeout(function(){ submitBtn.textContent = btnLabel; submitBtn.style.background = ''; }, 2800);
     });
   };
   d.appendChild(submitBtn);
@@ -2335,7 +2363,7 @@ function buildAthleteInscripcions() {
   }
 
   // ── ventana abierta: chips ──
-  const maxEv = comp.maxEvents || 4;
+  const maxEv = comp.maxEvents || 6;
   const head = document.createElement('div');
   head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin:14px 0 4px';
   head.innerHTML = '<div style="font-size:0.95rem;font-weight:700">Elige tus pruebas</div>';
