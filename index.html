@@ -2022,9 +2022,7 @@ function buildCalendar() {
       if (f.id === 'comp-start') {
         inp.addEventListener('change', function() {
           const endEl = document.getElementById('comp-end');
-          if (endEl && !endEl.value && this.value) {
-            endEl.value = this.value;
-          }
+          if (endEl && this.value) endEl.value = this.value;
         });
       }
     });
