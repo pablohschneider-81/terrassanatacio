@@ -2012,12 +2012,21 @@ function buildCalendar() {
     const fields = [
       {label:'Nombre',type:'text',id:'comp-name'},
       {label:'Fecha inicio',type:'date',id:'comp-start'},
-      {label:'Fecha fin',type:'date',id:'comp-end'},
+      {label:'Fecha fin (opcional)',type:'date',id:'comp-end'},
       {label:'Lugar',type:'text',id:'comp-loc'}
     ];
     fields.forEach(f => {
       const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = f.label; form.appendChild(lbl);
       const inp = document.createElement('input'); inp.type = f.type; inp.id = f.id; form.appendChild(inp);
+      // Al seleccionar fecha inicio, pre-cargar fecha fin en la misma fecha
+      if (f.id === 'comp-start') {
+        inp.addEventListener('change', function() {
+          const endEl = document.getElementById('comp-end');
+          if (endEl && !endEl.value && this.value) {
+            endEl.value = this.value;
+          }
+        });
+      }
     });
     const lbl2 = document.createElement('label'); lbl2.className = 'field-label'; lbl2.textContent = 'Tipo'; form.appendChild(lbl2);
     const typeSelect = document.createElement('select'); typeSelect.id = 'comp-type';
