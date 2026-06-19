@@ -2018,7 +2018,12 @@ function buildCalendar() {
     fields.forEach(f => {
       const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = f.label; form.appendChild(lbl);
       const inp = document.createElement('input'); inp.type = f.type; inp.id = f.id; form.appendChild(inp);
-      // Al seleccionar fecha inicio, pre-cargar fecha fin en la misma fecha
+      // Pre-cargar fecha inicio y fin al día 1 del mes actual
+      if (f.type === 'date') {
+        const now = new Date();
+        const firstOfMonth = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-01';
+        inp.value = firstOfMonth;
+      }
       if (f.id === 'comp-start') {
         inp.addEventListener('change', function() {
           const endEl = document.getElementById('comp-end');
