@@ -2590,12 +2590,14 @@ function buildAthleteStats() {
   d.appendChild(st);
 
   const avgRPE = hist.length > 0 ? (hist.reduce((s,h)=>s+h.rpe,0)/hist.length).toFixed(1) : '—';
-  const avgFat = hist.length > 0 ? (hist.reduce((s,h)=>s+h.fatigue,0)/hist.length).toFixed(1) : '—';
+  const avgFatNum = hist.length > 0 ? hist.reduce((s,h)=>s+h.fatigue,0)/hist.length : null;
+  const avgFat = avgFatNum !== null ? (FATIGUE.find(function(f){ return f.v === Math.round(avgFatNum); }) || FATIGUE[2]).label : '—';
+  const avgFatColor = avgFatNum !== null ? (FATIGUE.find(function(f){ return f.v === Math.round(avgFatNum); }) || FATIGUE[2]).color : 'var(--text2)';
 
   const sr = document.createElement('div'); sr.className = 'stat-row';
-  [{val:hist.length,lbl:'Sesiones'},{val:avgRPE,lbl:'RPE Medio'},{val:avgFat,lbl:'Fatiga Media'}].forEach(item => {
+  [{val:hist.length,lbl:'Sesiones',color:null},{val:avgRPE,lbl:'RPE Medio',color:avgRPE!=='—'?rpeColor(parseFloat(avgRPE)):null},{val:avgFat,lbl:'Fatiga Media',color:avgFatColor}].forEach(item => {
     const b = document.createElement('div'); b.className='stat-box';
-    b.innerHTML=`<div class="stat-val">${item.val}</div><div class="stat-lbl">${item.lbl}</div>`;
+    b.innerHTML=`<div class="stat-val" style="${item.color?'color:'+item.color:''}">${item.val}</div><div class="stat-lbl">${item.lbl}</div>`;
     sr.appendChild(b);
   });
   d.appendChild(sr);
