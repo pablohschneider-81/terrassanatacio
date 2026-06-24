@@ -2576,6 +2576,15 @@ function buildAthleteRPE() {
 // ============================================================
 function buildAthleteStats() {
   const d = document.createElement('div');
+  // Si no hay historia cargada, la pedimos y re-renderizamos
+  if (!DATA.athleteHist[S.athleteName]) {
+    dbGetAthleteHist(S.athleteName).then(function(h) {
+      DATA.athleteHist[S.athleteName] = h;
+      render();
+    });
+    d.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:40px;color:var(--text2);gap:10px"><span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Cargando estadísticas…</div>';
+    return d;
+  }
   const hist = DATA.athleteHist[S.athleteName] || [];
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'MI TEMPORADA';
   d.appendChild(st);
