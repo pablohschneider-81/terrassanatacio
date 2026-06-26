@@ -1066,6 +1066,21 @@ function formatDateLabel(s) {
 // ============================================================
 function parseMeters(text) {
   if (!text) return 0;
+  // Expand block multipliers: Nx{ ... } before line-by-line parsing
+  text = text.replace(/(\d+)\s*[xX×]\s*\{([^}]*)\}/g, (_, mult, inner) => {
+    const n = parseInt(mult);
+    return inner.trim().split('\n').map(line => {
+      const t = line.trim();
+      if (!t) return '';
+      // If line is NxD, multiply reps by block multiplier
+      const m = t.match(/^(\d+)\s*[xX×]\s*(\d+)(.*)/);
+      if (m) return (parseInt(m[1]) * n) + 'x' + m[2] + (m[3] || '');
+      // If bare distance line
+      const b = t.match(/^(\d+)(.*)/);
+      if (b) return (parseInt(b[1]) * n) + (b[2] || '');
+      return t;
+    }).filter(Boolean).join('\n');
+  });
   let total = 0;
   text.split('\n').forEach(line => {
     const t = line.trim();
@@ -1086,6 +1101,31 @@ function metersLabel(text) {
 function totalMeters(session) {
   if (session.phase === 'Fuerza') return 0;
   return parseMeters(session.warmUp) + parseMeters(session.preSet) + parseMeters(session.mainSet) + parseMeters(session.mainSetFondo) + parseMeters(session.coolDown);
+}
+function volumeBreakdown(session) {
+  if (session.phase === 'Fuerza') return null;
+  var base = parseMeters(session.warmUp) + parseMeters(session.preSet) + parseMeters(session.coolDown);
+  var grupo = base + parseMeters(session.mainSet);
+  var fondo = base + parseMeters(session.mainSetFondo);
+  return { grupo: grupo, fondo: fondo, hasGrupo: parseMeters(session.mainSet) > 0, hasFondo: parseMeters(session.mainSetFondo) > 0 };
+}
+function buildVolumeBlock(session, prefix) {
+  var vb = volumeBreakdown(session);
+  if (!vb) return null;
+  if (!vb.hasGrupo && !vb.hasFondo) return null;
+  var wrap = document.createElement('div');
+  wrap.style.marginTop = '10px';
+  if (vb.hasGrupo) {
+    var rowG = document.createElement('div'); rowG.className = 'total-meters'; rowG.style.marginBottom = '4px';
+    rowG.innerHTML = '<span>' + (prefix || '') + 'Vol. Grupo</span><span style="font-weight:700;color:var(--accent2)">' + vb.grupo + ' m</span>';
+    wrap.appendChild(rowG);
+  }
+  if (vb.hasFondo) {
+    var rowF = document.createElement('div'); rowF.className = 'total-meters';
+    rowF.innerHTML = '<span>' + (prefix || '') + 'Vol. Fondo</span><span style="font-weight:700;color:var(--gold)">' + vb.fondo + ' m</span>';
+    wrap.appendChild(rowF);
+  }
+  return wrap;
 }
 
 
@@ -1144,11 +1184,42 @@ function rpeColor(v) {
 // ============================================================
 function renderTextWithNotes(text) {
   if (!text) return '';
-  return text.split('\n').map(line => {
-    if (!line.trim()) return '';
+  const lines = text.split('\n');
+  const out = [];
+  let insideBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const raw = line.trim();
+    if (!raw) continue;
+    // Detect block opener: "2x{" or "2x {"
+    const opener = raw.match(/^(\d+)\s*[xX\u00d7]\s*\{(.*)$/);
+    if (opener) {
+      insideBlock = true;
+      const label = opener[1] + '\u00d7';
+      out.push(`<span style="color:var(--accent2);font-weight:700;letter-spacing:1px">${label}{</span>`);
+      if (opener[2].trim()) {
+        out.push('\n  ' + renderInlineNotes(opener[2].trim()));
+      }
+      continue;
+    }
+    // Detect block closer
+    if (raw === '}') {
+      insideBlock = false;
+      out.push(`\n<span style="color:var(--accent2);font-weight:700">}</span>`);
+      continue;
+    }
+    // Normal line
+    const indent = insideBlock ? '  ' : '';
     const parts = line.split(/(@[^@\n]+)/g);
-    return parts.map(p => p.startsWith('@') ? `<span class="at-note">${p}</span>` : p).join('');
-  }).filter(Boolean).join('\n');
+    const rendered = parts.map(p => p.startsWith('@') ? `<span class="at-note">${p}</span>` : p).join('');
+    out.push('\n' + indent + rendered.trimStart());
+  }
+  return out.join('').replace(/^\n/, '');
+}
+function renderInlineNotes(text) {
+  if (!text) return '';
+  return text.split(/(@[^@\n]+)/g)
+    .map(p => p.startsWith('@') ? `<span class="at-note">${p}</span>` : p).join('');
 }
 
 
@@ -1539,11 +1610,9 @@ function buildCoachSession() {
       if (m) mstat.textContent = '→ ' + m;
       d.appendChild(mstat);
     });
-    // Total meters
-    const tm = document.createElement('div'); tm.className = 'total-meters'; tm.id = 'total-meters-div';
-    const tot = totalMetersFromState();
-    tm.innerHTML = `<span>Total sesión</span><span style="font-weight:700;color:var(--accent2)">${tot > 0 ? tot + ' m' : '—'}</span>`;
-    d.appendChild(tm);
+    // Volume breakdown
+    const volBlock = buildVolumeBlock({ phase: S.sessionPhase, warmUp: S.warmUp, preSet: S.preSet, mainSet: S.mainSet, mainSetFondo: S.mainSetFondo, coolDown: S.coolDown }, '');
+    if (volBlock) { volBlock.id = 'total-meters-div'; d.appendChild(volBlock); }
   }
 
   // Pack días
@@ -1640,11 +1709,10 @@ function updateMeters(container) {
     const el = container.querySelector('[data-mstat="'+key+'"]');
     if (el) { const m = metersLabel(S[key]); el.textContent = m ? '→ ' + m : ''; }
   });
-  const tm = container.querySelector('#total-meters-div');
-  if (tm) {
-    const tot = totalMetersFromState();
-    const span = tm.querySelector('span:last-child');
-    if (span) span.textContent = tot > 0 ? tot + ' m' : '—';
+  const tmDiv = container.querySelector('#total-meters-div');
+  if (tmDiv) {
+    const newBlock = buildVolumeBlock({ phase: S.sessionPhase, warmUp: S.warmUp, preSet: S.preSet, mainSet: S.mainSet, mainSetFondo: S.mainSetFondo, coolDown: S.coolDown }, '');
+    if (newBlock) { newBlock.id = 'total-meters-div'; tmDiv.replaceWith(newBlock); }
   }
 }
 
@@ -2278,9 +2346,8 @@ function buildCoachHistorial() {
             body.appendChild(sec);
           });
           if (tm > 0) {
-            const tmDiv = document.createElement('div'); tmDiv.className = 'total-meters'; tmDiv.style.marginTop = '10px';
-            tmDiv.innerHTML = '<span>Total' + (histSlots.length > 1 ? ' ' + slotObj.slot.toUpperCase() : ' sesión') + '</span><span style="font-weight:700;color:var(--accent2)">' + tm + ' m</span>';
-            body.appendChild(tmDiv);
+            const tmDiv = buildVolumeBlock(sess2, histSlots.length > 1 ? slotObj.slot.toUpperCase() + ' ' : '');
+            if (tmDiv) body.appendChild(tmDiv);
           }
         }
       });
@@ -2433,8 +2500,8 @@ function buildAthleteInicio() {
               body.appendChild(ss);
             }
           });
-          const tm = totalMeters(sess);
-          if (tm > 0) { const t = document.createElement('div'); t.className='total-meters';t.style.marginTop='10px';t.innerHTML='<span>Total' + (slots.length > 1 ? ' ' + slotObj.slot.toUpperCase() : '') + '</span><span style="font-weight:700;color:var(--accent2)">' + tm + ' m</span>';body.appendChild(t); }
+          const volB = buildVolumeBlock(sess, slots.length > 1 ? slotObj.slot.toUpperCase() + ' ' : '');
+          if (volB) body.appendChild(volB);
         }
       });
       dc.appendChild(body);
