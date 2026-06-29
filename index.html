@@ -984,11 +984,13 @@ let S = {
   histMonth: null,
   // athlete
   ath_tab: 0,
+  editingPB: null,
   rpeSelected: null,
   fatigueSelected: null,
   rpeNote: '',
   rpeSubmitted: false,
   dayCardOpen: {},
+  athDayOpen: {},
   // modals
   commentAthlete: null,
   commentText: '',
@@ -1006,6 +1008,7 @@ let S = {
 // ============================================================
 const DATA = {
   athletes: [],
+  pbs: {},
   sessions: {}, // date -> {am,pm}
   allSessions: [],
   rpe: {},      // date -> {athleteName: {am,pm}}
@@ -1289,13 +1292,13 @@ function render() {
 
   if (S.role === 'coach') {
     const tabs = ['Sesión','RPE','Calend.','Inscr.','Equipo','Historial'];
-    content.appendChild(buildTabs(tabs, S.tab, i => { S.tab = i; render(); }));
+    content.appendChild(buildTabs(tabs, S.tab, i => { S.tab = i; if(i===2){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
     const views = [buildCoachSession, buildCoachRPE, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial];
     content.appendChild(views[S.tab]());
   } else {
-    const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Stats'];
-    content.appendChild(buildTabs(tabs, S.ath_tab, i => { S.ath_tab = i; render(); }));
-    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteInscripcions, buildAthleteStats];
+    const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión'];
+    content.appendChild(buildTabs(tabs, S.ath_tab, i => { S.ath_tab = i; if(i===2){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
+    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteInscripcions, buildAthleteSession];
     content.appendChild(views[S.ath_tab]());
   }
 
@@ -1480,7 +1483,7 @@ function buildBottomNav() {
       {icon:'💪',label:'Mi RPE'},
       {icon:'📅',label:'Calend.'},
       {icon:'🏁',label:'Inscr.'},
-      {icon:'📈',label:'Stats'}
+      {icon:'🏊',label:'Sesión'}
     ];
     items.forEach((item, i) => {
       const btn = document.createElement('button');
@@ -2384,10 +2387,10 @@ function buildAthleteInicio() {
   const competitions = getCompetitions();
   const todayDate = todayS;
   competitions.filter(c => {
-    // mostrar si: inscripción abierta, o compe en los próximos 14 días
-    const inscOpen = c.inscOpen && c.inscClose && todayDate >= c.inscOpen && todayDate <= c.inscClose;
-    const diffDays = Math.ceil((dateObj(c.start) - today) / 86400000);
-    return inscOpen || (diffDays >= 0 && diffDays <= 14);
+    // Aparece 25 días antes del inicio y desaparece el día después de c.end
+    const daysToStart = Math.ceil((dateObj(c.start) - today) / 86400000);
+    const endPassed = todayDate > c.end;
+    return !endPassed && daysToStart <= 25;
   }).sort((a,b) => a.start.localeCompare(b.start)).forEach(function(c) {
     const inscOpen = c.inscOpen && c.inscClose && todayDate >= c.inscOpen && todayDate <= c.inscClose;
     const diffDays = Math.ceil((dateObj(c.start) - today) / 86400000);
@@ -2441,73 +2444,34 @@ function buildAthleteInicio() {
     d.appendChild(banner);
   });
 
-  // Current week sessions
-  const weekSt = document.createElement('div'); weekSt.className = 'section-title'; weekSt.textContent = 'SEMANA ACTUAL';
-  d.appendChild(weekSt);
-
-  const mondayOffset = today.getDay() === 0 ? -6 : 1 - today.getDay();
-  for (let i = 0; i < 7; i++) {
-    const dt = new Date(today); dt.setDate(today.getDate() + mondayOffset + i);
-    const ds = dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
-    const session = getSession(ds);
-    const isPast = ds < todayS;
-    const isToday = ds === todayS;
-    const isFuture = ds > todayS;
-
-    if (isPast && !session) continue; // hidden
-
-    const dc = document.createElement('div'); dc.className = 'day-card' + (isToday ? ' today-card' : '');
-    const slots = daySlots(session);
-    if (isFuture && slots.length === 0) dc.classList.add('greyed');
-
-    const titles = slots.length > 0 ? slots.map(function(s){ return (s.label ? s.label + ' ' : '') + s.sess.title; }).join(' · ') : 'Sin sesión';
-    const dch = document.createElement('div'); dch.className = 'day-card-header';
-    dch.innerHTML = `<div><div class="day-name">${DAYS_ES[dt.getDay()]} ${dt.getDate()}${slots.length > 1 ? ' <span style="font-size:0.65rem;color:var(--gold);font-weight:700">2x</span>' : ''}</div><div class="day-phase">${titles}</div></div>`;
-    if (slots.length > 0) {
-      const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = slots[0].sess.phase;
-      dch.appendChild(tag);
-    }
-    dch.onclick = () => {
-      if (slots.length === 0) return;
-      S.dayCardOpen[ds] = !S.dayCardOpen[ds]; render();
-    };
-    dc.appendChild(dch);
-
-    if (slots.length > 0 && S.dayCardOpen[ds]) {
-      const body = document.createElement('div'); body.className = 'day-card-body open';
-      slots.forEach(function(slotObj, slotIdx) {
-        const sess = slotObj.sess;
-        if (slots.length > 1) {
-          const slotHdr = document.createElement('div');
-          slotHdr.style.cssText = 'font-size:0.78rem;font-weight:700;color:var(--gold);margin-top:' + (slotIdx > 0 ? '16px' : '10px') + ';padding-bottom:4px;border-bottom:1px solid var(--border)';
-          slotHdr.textContent = slotObj.label || '☀️ Mañana';
-          body.appendChild(slotHdr);
-        }
-        if (sess.phase === 'Fuerza') {
-          if (sess.alphaPhase) { const ap = document.createElement('div'); ap.innerHTML = '<span class="tag" style="margin-bottom:8px">' + sess.alphaPhase + '</span>'; body.appendChild(ap); }
-          [['Pull',sess.pullText],['Push',sess.pushText],['Lower Body',sess.lowerText]].forEach(function(pair) {
-            if (pair[1]) {
-              const ss = document.createElement('div'); ss.className = 'session-section';
-              ss.innerHTML = '<div class="section-lbl">' + pair[0] + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
-              body.appendChild(ss);
-            }
-          });
-        } else {
-          [['Warm Up',sess.warmUp],['Pre Set',sess.preSet],['Main Set (Grupo)',sess.mainSet],['Main Set (Fondo)',sess.mainSetFondo],['Cool Down',sess.coolDown]].forEach(function(pair) {
-            if (pair[1]) {
-              const ss = document.createElement('div'); ss.className = 'session-section';
-              ss.innerHTML = '<div class="section-lbl">' + pair[0] + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
-              body.appendChild(ss);
-            }
-          });
-          const volB = buildVolumeBlock(sess, slots.length > 1 ? slotObj.slot.toUpperCase() + ' ' : '');
-          if (volB) body.appendChild(volB);
-        }
-      });
-      dc.appendChild(body);
-    }
-    d.appendChild(dc);
+  // ── Gráficos de temporada ──
+  if (!DATA.athleteHist[S.athleteName]) {
+    dbGetAthleteHist(S.athleteName).then(function(h) {
+      DATA.athleteHist[S.athleteName] = h;
+      render();
+    });
   }
+  const hist = DATA.athleteHist[S.athleteName] || [];
+  if (hist.length > 1) {
+    const stRPE = document.createElement('div'); stRPE.className = 'section-title'; stRPE.style.marginTop='16px'; stRPE.textContent = 'ÚLTIMAS SESIONES — RPE';
+    d.appendChild(stRPE);
+    d.appendChild(buildRPEChart(hist.slice(-14)));
+
+    if (hist.length >= 3) {
+      const stACWR = document.createElement('div'); stACWR.className = 'section-title'; stACWR.style.marginTop='16px'; stACWR.textContent = 'CARGA AGUDA:CRÓNICA';
+      d.appendChild(stACWR);
+      d.appendChild(buildACWRChart(hist));
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin-top:4px;padding:0 2px;margin-bottom:4px';
+      note.textContent = 'Verde 0.8–1.3 óptimo · Naranja atención · Rojo riesgo';
+      d.appendChild(note);
+    }
+  } else {
+    const noData = document.createElement('div'); noData.style.cssText='padding:20px 0;color:var(--text2);font-size:0.85rem;text-align:center';
+    noData.textContent = 'Registra tus primeras sesiones para ver tus gráficos';
+    d.appendChild(noData);
+  }
+
   return d;
 }
 
@@ -2641,7 +2605,107 @@ function buildAthleteRPE() {
 }
 
 // ============================================================
-// ATHLETE: STATS
+// ATHLETE: SESIÓN (tab 4 — sesión de hoy)
+// ============================================================
+function buildAthleteSession() {
+  const d = document.createElement('div');
+  const today = new Date();
+  const todayS = todayStr();
+
+  // Hoy abierto por defecto la primera vez
+  if (S.athDayOpen[todayS] === undefined) S.athDayOpen[todayS] = true;
+
+  // Semana: lunes a domingo
+  const mondayOffset = today.getDay() === 0 ? -6 : 1 - today.getDay();
+
+  for (let i = 0; i < 7; i++) {
+    const dt = new Date(today);
+    dt.setDate(today.getDate() + mondayOffset + i);
+    const ds = dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
+    const session = getSession(ds);
+    const slots = daySlots(session);
+    const isToday = ds === todayS;
+    const isPast = ds < todayS;
+
+    // Ocultar días pasados sin sesión
+    if (isPast && slots.length === 0) continue;
+
+    const dc = document.createElement('div');
+    dc.className = 'day-card' + (isToday ? ' today-card' : '');
+    if (!isToday && slots.length === 0) dc.classList.add('greyed');
+
+    // Header clicable
+    const titles = slots.length > 0
+      ? slots.map(function(s){ return (s.label ? s.label + ' ' : '') + s.sess.title; }).join(' · ')
+      : 'Sin sesión';
+    const totalM = slots.reduce(function(acc, slotObj) {
+      const sess = slotObj.sess;
+      if (sess.phase === 'Fuerza') return acc;
+      return acc + parseMeters(sess.warmUp) + parseMeters(sess.preSet) + parseMeters(sess.mainSet) + parseMeters(sess.mainSetFondo) + parseMeters(sess.coolDown);
+    }, 0);
+
+    const dch = document.createElement('div'); dch.className = 'day-card-header';
+    const dayLabel = DAYS_ES[dt.getDay()] + ' ' + dt.getDate();
+    const doubleTag = slots.length > 1 ? ' <span style="font-size:0.65rem;color:var(--gold);font-weight:700">2x</span>' : '';
+    const todayBadge = isToday ? ' <span style="font-size:0.65rem;background:var(--accent2);color:#fff;padding:1px 6px;border-radius:4px;font-weight:700">HOY</span>' : '';
+    const metersTag = totalM > 0 ? ' <span style="font-size:0.72rem;color:var(--accent2)">' + totalM + 'm</span>' : '';
+    const arrow = slots.length > 0 ? (S.athDayOpen[ds] ? ' ▾' : ' ▸') : '';
+
+    dch.innerHTML = '<div style="flex:1"><div class="day-name">' + dayLabel + doubleTag + todayBadge + '</div><div class="day-phase">' + titles + metersTag + '</div></div>';
+    if (slots.length > 0) {
+      const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = slots[0].sess.phase;
+      dch.appendChild(tag);
+      const arrowEl = document.createElement('span');
+      arrowEl.style.cssText = 'color:var(--text2);font-size:0.85rem;margin-left:8px';
+      arrowEl.textContent = S.athDayOpen[ds] ? '▾' : '▸';
+      dch.appendChild(arrowEl);
+    }
+
+    if (slots.length > 0) {
+      dch.onclick = function() { S.athDayOpen[ds] = !S.athDayOpen[ds]; render(); };
+    }
+    dc.appendChild(dch);
+
+    // Body colapsable
+    if (slots.length > 0 && S.athDayOpen[ds]) {
+      const body = document.createElement('div'); body.className = 'day-card-body open';
+      slots.forEach(function(slotObj, slotIdx) {
+        const sess = slotObj.sess;
+        if (slots.length > 1) {
+          const slotHdr = document.createElement('div');
+          slotHdr.style.cssText = 'font-size:0.78rem;font-weight:700;color:var(--gold);margin-top:' + (slotIdx > 0 ? '16px' : '10px') + ';padding-bottom:4px;border-bottom:1px solid var(--border)';
+          slotHdr.textContent = slotObj.label || (slotIdx === 0 ? '☀️ Mañana' : '🌙 Tarde');
+          body.appendChild(slotHdr);
+        }
+        if (sess.phase === 'Fuerza') {
+          if (sess.alphaPhase) { const ap = document.createElement('div'); ap.innerHTML = '<span class="tag" style="margin-bottom:8px">' + sess.alphaPhase + '</span>'; body.appendChild(ap); }
+          [['Pull', sess.pullText],['Push', sess.pushText],['Lower Body', sess.lowerText]].forEach(function(pair) {
+            if (!pair[1]) return;
+            const ss = document.createElement('div'); ss.className = 'session-section';
+            ss.innerHTML = '<div class="section-lbl">' + pair[0] + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
+            body.appendChild(ss);
+          });
+        } else {
+          [['Warm Up', sess.warmUp],['Pre Set', sess.preSet],['Main Set (Grupo)', sess.mainSet],['Main Set (Fondo)', sess.mainSetFondo],['Cool Down', sess.coolDown]].forEach(function(pair) {
+            if (!pair[1]) return;
+            const m = metersLabel(pair[1]);
+            const ss = document.createElement('div'); ss.className = 'session-section';
+            ss.innerHTML = '<div class="section-lbl">' + pair[0] + (m ? ' <span style=\"color:var(--accent2);font-weight:normal\">(' + m + ')</span>' : '') + '</div><div class="session-lines">' + renderTextWithNotes(pair[1]) + '</div>';
+            body.appendChild(ss);
+          });
+          const volB = buildVolumeBlock(sess, slots.length > 1 ? slotObj.slot.toUpperCase() + ' ' : '');
+          if (volB) body.appendChild(volB);
+        }
+      });
+      dc.appendChild(body);
+    }
+    d.appendChild(dc);
+  }
+  return d;
+}
+
+// ============================================================
+// ATHLETE: STATS (ahora: MI TEMPORADA — gráficos + marcas)
 // ============================================================
 function buildAthleteStats() {
   const d = document.createElement('div');
@@ -2655,9 +2719,8 @@ function buildAthleteStats() {
     return d;
   }
   const hist = DATA.athleteHist[S.athleteName] || [];
-  const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'MI TEMPORADA';
-  d.appendChild(st);
 
+  // ── Stat pills ──
   const avgRPE = hist.length > 0 ? (hist.reduce((s,h)=>s+h.rpe,0)/hist.length).toFixed(1) : '—';
   const avgFatNum = hist.length > 0 ? hist.reduce((s,h)=>s+h.fatigue,0)/hist.length : null;
   const avgFat = avgFatNum !== null ? (FATIGUE.find(function(f){ return f.v === Math.round(avgFatNum); }) || FATIGUE[2]).label : '—';
@@ -2671,89 +2734,195 @@ function buildAthleteStats() {
   });
   d.appendChild(sr);
 
-  // SVG line chart last 14
+  // ── Gráfico RPE ──
   const last14 = hist.slice(-14);
   if (last14.length > 1) {
     const st2 = document.createElement('div'); st2.className='section-title'; st2.style.marginTop='20px'; st2.textContent='ÚLTIMAS 14 SESIONES — RPE';
     d.appendChild(st2);
-
-    const W = 320, H = 160, PAD = { top:16, right:16, bottom:28, left:28 };
-    const iW = W - PAD.left - PAD.right;
-    const iH = H - PAD.top - PAD.bottom;
-    const n = last14.length;
-    const xPos = i => PAD.left + (i / (n - 1)) * iW;
-    const yPos = v => PAD.top + iH - ((v - 1) / 9) * iH;
-
-    // gradient stops under curve
-    const gradStops = last14.map((h, i) => {
-      const pct = Math.round((i / (n - 1)) * 100);
-      return '<stop offset="' + pct + '%" stop-color="' + rpeColor(h.rpe) + '" stop-opacity="0.4"/>';
-    }).join('');
-
-    // Build shared cubic bezier path (reused for both stroke and fill)
-    function buildCurvePath(pts, close) {
-      let d = 'M' + pts[0].x + ' ' + pts[0].y;
-      for (let i = 1; i < pts.length; i++) {
-        const cpX = (pts[i-1].x + pts[i].x) / 2;
-        d += ' C' + cpX + ' ' + pts[i-1].y + ' ' + cpX + ' ' + pts[i].y + ' ' + pts[i].x + ' ' + pts[i].y;
-      }
-      if (close) {
-        d += ' L' + pts[pts.length-1].x + ' ' + (PAD.top + iH);
-        d += ' L' + pts[0].x + ' ' + (PAD.top + iH) + ' Z';
-      }
-      return d;
-    }
-    const curvePts = last14.map((h, i) => ({ x: xPos(i), y: yPos(h.rpe) }));
-    const areaPath  = buildCurvePath(curvePts, true);
-    const strokePath = buildCurvePath(curvePts, false);
-
-    // Y axis labels
-    const yLabels = [1,3,5,7,10].map(v =>
-      '<text x="' + (PAD.left - 5) + '" y="' + (yPos(v) + 4) + '" font-size="9" fill="#a8bfd4" text-anchor="end">' + v + '</text>'
-    ).join('');
-
-    // Y gridlines
-    const yGrids = [3,5,7].map(v =>
-      '<line x1="' + PAD.left + '" y1="' + yPos(v) + '" x2="' + (PAD.left + iW) + '" y2="' + yPos(v) + '" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>'
-    ).join('');
-
-    // X date labels — show every 3rd
-    const xLabels = last14.map((h, i) => {
-      if (i % 3 !== 0 && i !== n-1) return '';
-      const dt = dateObj(h.date);
-      const lbl = dt.getDate() + '/' + (dt.getMonth()+1);
-      return '<text x="' + xPos(i) + '" y="' + (H - 4) + '" font-size="8" fill="#a8bfd4" text-anchor="middle">' + lbl + '</text>';
-    }).join('');
-
-    // Dots with RPE value
-    const dots = last14.map((h, i) => {
-      const cx = xPos(i), cy = yPos(h.rpe);
-      return '<circle cx="' + cx + '" cy="' + cy + '" r="4" fill="' + rpeColor(h.rpe) + '" stroke="var(--bg)" stroke-width="2"/>'
-        + '<text x="' + cx + '" y="' + (cy - 8) + '" font-size="9" fill="' + rpeColor(h.rpe) + '" text-anchor="middle" font-weight="700">' + h.rpe + '</text>';
-    }).join('');
-
-    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-    svg.setAttribute('width', '100%');
-    svg.setAttribute('height', H);
-    svg.innerHTML =
-      '<defs>'
-      + '<linearGradient id="rpeGrad" x1="0%" y1="0%" x2="100%" y2="0%">' + gradStops + '</linearGradient>'
-      + '</defs>'
-      + yGrids
-      + yLabels
-      + xLabels
-      + '<path d="' + areaPath + '" fill="url(#rpeGrad)"/>'
-      + '<path d="' + strokePath + '" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
-      + dots;
-
-    const card = document.createElement('div'); card.className='card'; card.style.padding='12px 8px';
-    card.appendChild(svg);
-    d.appendChild(card);
+    d.appendChild(buildRPEChart(last14));
   }
+
+  // ── Gráfico ACWR ──
+  if (hist.length >= 3) {
+    const st3 = document.createElement('div'); st3.className='section-title'; st3.style.marginTop='20px'; st3.textContent='CARGA AGUDA:CRÓNICA (ACWR)';
+    d.appendChild(st3);
+    d.appendChild(buildACWRChart(hist));
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin-top:4px;padding:0 2px';
+    note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5';
+    d.appendChild(note);
+  }
+
+  // ── Marcas personales ──
+  const stM = document.createElement('div'); stM.className='section-title'; stM.style.marginTop='24px'; stM.textContent='MARCAS PERSONALES';
+  d.appendChild(stM);
+
+  // Mejor tiempo 100m CR
+  const pb100Key = 'pb_100cr_' + S.athleteName;
+  const pb100 = DATA.pbs && DATA.pbs[pb100Key] ? DATA.pbs[pb100Key] : null;
+
+  const card100 = document.createElement('div'); card100.className='card'; card100.style.cssText='padding:14px 16px;margin-bottom:10px';
+  card100.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--accent2);text-transform:uppercase;margin-bottom:6px">🏅 100m CROL</div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between">' +
+    '<div style="font-size:1.6rem;font-weight:800;color:var(--text)">' + (pb100 || '—') + '</div>' +
+    '<button id="btn-edit-100cr" style="font-size:0.78rem;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.05);color:var(--text2);cursor:pointer">✏️ Editar</button>' +
+    '</div>';
+  d.appendChild(card100);
+
+  // Mejor prueba (estilo libre preferida)
+  const pbBestKey = 'pb_best_' + S.athleteName;
+  const pbBestData = DATA.pbs && DATA.pbs[pbBestKey] ? DATA.pbs[pbBestKey] : null;
+  const pbBestTime = DATA.pbs && DATA.pbs[pbBestKey + '_time'] ? DATA.pbs[pbBestKey + '_time'] : null;
+
+  const cardBest = document.createElement('div'); cardBest.className='card'; cardBest.style.cssText='padding:14px 16px;margin-bottom:10px';
+  cardBest.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--gold);text-transform:uppercase;margin-bottom:6px">🥇 MEJOR PRUEBA</div>' +
+    '<div style="display:flex;align-items:center;justify-content:space-between">' +
+    '<div><div style="font-size:0.9rem;color:var(--text2);margin-bottom:2px">' + (pbBestData || 'Sin configurar') + '</div><div style="font-size:1.4rem;font-weight:800;color:var(--text)">' + (pbBestTime || '—') + '</div></div>' +
+    '<button id="btn-edit-best" style="font-size:0.78rem;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.05);color:var(--text2);cursor:pointer">✏️ Editar</button>' +
+    '</div>';
+  d.appendChild(cardBest);
+
+  // Inputs inline para editar marcas
+  if (S.editingPB === '100cr') {
+    const wrap = document.createElement('div'); wrap.className='card'; wrap.style.cssText='padding:14px 16px;margin-bottom:10px';
+    wrap.innerHTML = '<div class="field-label">TIEMPO 100m CROL (ej: 1:02.45)</div>';
+    const inp = document.createElement('input'); inp.type='text'; inp.placeholder='1:02.45'; inp.value=pb100||'';
+    inp.style.cssText='width:100%;box-sizing:border-box;margin-top:4px';
+    const savBtn = document.createElement('button'); savBtn.className='btn btn-primary'; savBtn.style.marginTop='10px'; savBtn.textContent='Guardar';
+    savBtn.onclick = function() {
+      if (!DATA.pbs) DATA.pbs = {};
+      DATA.pbs[pb100Key] = inp.value.trim();
+      S.editingPB = null;
+      render();
+    };
+    wrap.appendChild(inp); wrap.appendChild(savBtn);
+    d.appendChild(wrap);
+  }
+  if (S.editingPB === 'best') {
+    const wrap = document.createElement('div'); wrap.className='card'; wrap.style.cssText='padding:14px 16px;margin-bottom:10px';
+    wrap.innerHTML = '<div class="field-label">PRUEBA (ej: 200m Libre)</div>';
+    const inpPrueba = document.createElement('input'); inpPrueba.type='text'; inpPrueba.placeholder='200m Libre'; inpPrueba.value=pbBestData||'';
+    inpPrueba.style.cssText='width:100%;box-sizing:border-box;margin-top:4px';
+    const inpTime = document.createElement('input'); inpTime.type='text'; inpTime.placeholder='2:05.33'; inpTime.value=pbBestTime||'';
+    const lblT = document.createElement('div'); lblT.className='field-label'; lblT.style.marginTop='10px'; lblT.textContent='TIEMPO';
+    inpTime.style.cssText='width:100%;box-sizing:border-box;margin-top:4px';
+    const savBtn = document.createElement('button'); savBtn.className='btn btn-primary'; savBtn.style.marginTop='10px'; savBtn.textContent='Guardar';
+    savBtn.onclick = function() {
+      if (!DATA.pbs) DATA.pbs = {};
+      DATA.pbs[pbBestKey] = inpPrueba.value.trim();
+      DATA.pbs[pbBestKey + '_time'] = inpTime.value.trim();
+      S.editingPB = null;
+      render();
+    };
+    wrap.appendChild(inpPrueba); wrap.appendChild(lblT); wrap.appendChild(inpTime); wrap.appendChild(savBtn);
+    d.appendChild(wrap);
+  }
+
+  // Edit button handlers
+  d.addEventListener('click', function(e) {
+    if (e.target.id === 'btn-edit-100cr') { S.editingPB = '100cr'; render(); }
+    if (e.target.id === 'btn-edit-best') { S.editingPB = 'best'; render(); }
+  });
+
   return d;
 }
 
+// Helper: RPE line chart SVG
+function buildRPEChart(last14) {
+  const W = 320, H = 160, PAD = { top:16, right:16, bottom:28, left:28 };
+  const iW = W - PAD.left - PAD.right, iH = H - PAD.top - PAD.bottom;
+  const n = last14.length;
+  const xPos = i => PAD.left + (i / (n - 1)) * iW;
+  const yPos = v => PAD.top + iH - ((v - 1) / 9) * iH;
+  const gradStops = last14.map((h, i) => '<stop offset="' + Math.round((i/(n-1))*100) + '%" stop-color="' + rpeColor(h.rpe) + '" stop-opacity="0.4"/>').join('');
+  function curvePath(pts, close) {
+    let d = 'M' + pts[0].x + ' ' + pts[0].y;
+    for (let i = 1; i < pts.length; i++) {
+      const cx = (pts[i-1].x + pts[i].x) / 2;
+      d += ' C' + cx + ' ' + pts[i-1].y + ' ' + cx + ' ' + pts[i].y + ' ' + pts[i].x + ' ' + pts[i].y;
+    }
+    if (close) { d += ' L' + pts[n-1].x + ' ' + (PAD.top+iH) + ' L' + pts[0].x + ' ' + (PAD.top+iH) + ' Z'; }
+    return d;
+  }
+  const pts = last14.map((h,i) => ({x:xPos(i),y:yPos(h.rpe)}));
+  const yGrids = [3,5,7].map(v => '<line x1="'+PAD.left+'" y1="'+yPos(v)+'" x2="'+(PAD.left+iW)+'" y2="'+yPos(v)+'" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>').join('');
+  const yLabels = [1,3,5,7,10].map(v => '<text x="'+(PAD.left-5)+'" y="'+(yPos(v)+4)+'" font-size="9" fill="#a8bfd4" text-anchor="end">'+v+'</text>').join('');
+  const xLabels = last14.map((h,i) => { if (i%3!==0 && i!==n-1) return ''; const dt=dateObj(h.date); return '<text x="'+xPos(i)+'" y="'+(H-4)+'" font-size="8" fill="#a8bfd4" text-anchor="middle">'+dt.getDate()+'/'+(dt.getMonth()+1)+'</text>'; }).join('');
+  const dots = last14.map((h,i) => { const cx=xPos(i),cy=yPos(h.rpe); return '<circle cx="'+cx+'" cy="'+cy+'" r="4" fill="'+rpeColor(h.rpe)+'" stroke="var(--bg)" stroke-width="2"/><text x="'+cx+'" y="'+(cy-8)+'" font-size="9" fill="'+rpeColor(h.rpe)+'" text-anchor="middle" font-weight="700">'+h.rpe+'</text>'; }).join('');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.setAttribute('width','100%'); svg.setAttribute('height',H);
+  svg.innerHTML = '<defs><linearGradient id="rpeGrad2" x1="0%" y1="0%" x2="100%" y2="0%">'+gradStops+'</linearGradient></defs>'+yGrids+yLabels+xLabels+'<path d="'+curvePath(pts,true)+'" fill="url(#rpeGrad2)"/><path d="'+curvePath(pts,false)+'" fill="none" stroke="rgba(255,255,255,0.9)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'+dots;
+  const card = document.createElement('div'); card.className='card'; card.style.padding='12px 8px';
+  card.appendChild(svg);
+  return card;
+}
+
+// Helper: ACWR bar chart SVG (últimas 8 semanas)
+function buildACWRChart(hist) {
+  // Calcular ACWR semanal rolling (últimas 8 semanas desde hoy)
+  const today = new Date();
+  const weeks = [];
+  for (let w = 7; w >= 0; w--) {
+    const weekEnd = new Date(today); weekEnd.setDate(today.getDate() - w * 7);
+    const weekStart = new Date(weekEnd); weekStart.setDate(weekEnd.getDate() - 6);
+    const acute = hist.reduce((s,h) => {
+      const d = dateObj(h.date);
+      return (d >= weekStart && d <= weekEnd) ? s + h.rpe * (h.duration || 80) : s;
+    }, 0);
+    const chronStart = new Date(weekEnd); chronStart.setDate(weekEnd.getDate() - 27);
+    const chronic28 = hist.reduce((s,h) => {
+      const d = dateObj(h.date);
+      return (d >= chronStart && d <= weekEnd) ? s + h.rpe * (h.duration || 80) : s;
+    }, 0);
+    const chronicWeekly = chronic28 / 4;
+    const ratio = chronicWeekly > 0 ? Math.round((acute / chronicWeekly) * 100) / 100 : null;
+    const label = (weekEnd.getDate()) + '/' + (weekEnd.getMonth()+1);
+    weeks.push({ label, ratio });
+  }
+
+  const W = 320, H = 140, PAD = { top:16, right:10, bottom:28, left:36 };
+  const iW = W - PAD.left - PAD.right, iH = H - PAD.top - PAD.bottom;
+  const maxR = 2.0;
+  const barW = Math.floor(iW / weeks.length) - 4;
+
+  function acwrBarColor(r) {
+    if (r === null) return '#334';
+    if (r < 0.8) return '#3498db';
+    if (r <= 1.3) return '#27ae60';
+    if (r <= 1.5) return '#f39c12';
+    return '#e74c3c';
+  }
+
+  const yLines = [0.8, 1.0, 1.3, 1.5].map(v => {
+    const y = PAD.top + iH - (v / maxR) * iH;
+    const dash = v === 1.0 ? '' : ' stroke-dasharray="3,3"';
+    return '<line x1="'+PAD.left+'" y1="'+y+'" x2="'+(PAD.left+iW)+'" y2="'+y+'" stroke="rgba(255,255,255,0.08)"'+dash+' stroke-width="1"/>'
+      + '<text x="'+(PAD.left-4)+'" y="'+(y+3)+'" font-size="8" fill="#a8bfd4" text-anchor="end">'+v+'</text>';
+  }).join('');
+
+  const bars = weeks.map((w, i) => {
+    const x = PAD.left + i * (barW + 4);
+    const ratio = w.ratio;
+    const barH = ratio !== null ? Math.min((ratio / maxR) * iH, iH) : 0;
+    const y = PAD.top + iH - barH;
+    const col = acwrBarColor(ratio);
+    const val = ratio !== null ? ratio.toFixed(2) : '—';
+    return '<rect x="'+x+'" y="'+y+'" width="'+barW+'" height="'+barH+'" rx="3" fill="'+col+'" opacity="0.85"/>'
+      + '<text x="'+(x+barW/2)+'" y="'+(y-4)+'" font-size="8" fill="'+col+'" text-anchor="middle" font-weight="700">'+(ratio!==null?val:'')+' </text>'
+      + '<text x="'+(x+barW/2)+'" y="'+(H-4)+'" font-size="7" fill="#a8bfd4" text-anchor="middle">'+w.label+'</text>';
+  }).join('');
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.setAttribute('width','100%'); svg.setAttribute('height',H);
+  svg.innerHTML = yLines + bars;
+  const card = document.createElement('div'); card.className='card'; card.style.padding='12px 8px';
+  card.appendChild(svg);
+  return card;
+}
+
+// ============================================================
+// COMMENT BOTTOM SHEET
+// ============================================================
 // ============================================================
 // COMMENT BOTTOM SHEET
 // ============================================================
