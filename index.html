@@ -56,60 +56,68 @@
   /* LOGIN */
   .login-screen {
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    min-height: 100vh; padding: 24px; gap: 28px;
+    min-height: 100vh; padding: 24px; gap: 32px;
     position: relative; overflow: hidden;
-    background: #050e1d;
+    background: linear-gradient(160deg, #b8d4e8 0%, #c8dff0 35%, #d4eae0 65%, #cce0f0 100%);
   }
-  /* synthwave grid fondo */
-  .login-screen::before {
-    content: '';
-    position: absolute; inset: 0;
-    background:
-      linear-gradient(rgba(52,152,219,0.07) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(52,152,219,0.07) 1px, transparent 1px);
-    background-size: 40px 40px;
-    animation: grid-scroll 3s linear infinite;
-    pointer-events: none;
-    z-index: 0;
-  }
-  /* línea horizonte */
-  .login-screen::after {
-    content: '';
-    position: absolute; left: 0; right: 0; top: 55%;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(52,152,219,0.5) 30%, rgba(240,192,64,0.4) 50%, rgba(52,152,219,0.5) 70%, transparent);
-    pointer-events: none;
-    z-index: 0;
+  .login-screen::before { display: none; }
+  .login-screen::after { display: none; }
+  /* ONDAS DE AGUA */
+  .login-wave { position: absolute; bottom: 0; left: -10%; width: 120%; pointer-events: none; z-index: 0; }
+  .login-wave svg { display: block; width: 100%; }
+  .login-wave.w1 { bottom: -10px; animation: wave-drift 7s ease-in-out infinite; opacity: 0.35; }
+  .login-wave.w2 { bottom: -20px; animation: wave-drift2 9s ease-in-out infinite; opacity: 0.25; }
+  .login-wave.w3 { bottom: -5px; animation: wave-drift 11s ease-in-out infinite reverse; opacity: 0.18; }
+  /* BURBUJAS */
+  .login-bubble { position: absolute; border-radius: 50%; aspect-ratio: 1; background: radial-gradient(circle at 35% 35%, rgba(255,255,255,0.75) 0%, rgba(255,255,255,0.25) 50%, rgba(200,225,245,0.15) 100%); border: 1px solid rgba(255,255,255,0.6); box-shadow: inset 0 0 8px rgba(255,255,255,0.4), 0 2px 8px rgba(150,190,220,0.2); animation: bubble-rise linear infinite; pointer-events: none; backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px); }
+  /* LOGO */
+  .login-logo { animation: logo-drop 0.9s cubic-bezier(0.22,1,0.36,1) both; z-index: 1; text-align: center; }
+  /* CARD */
+  .login-card { animation: card-rise 0.8s cubic-bezier(0.22,1,0.36,1) 0.25s both; z-index: 1; }
+  /* SHIMMER en TERRASSA */
+  .login-logo-terrassa {
+    display: block;
+    font-family: 'Exo 2', sans-serif;
+    font-size: 2.8rem; font-weight: 900; font-style: italic;
+    letter-spacing: 1px; line-height: 1;
+    background: linear-gradient(90deg, #5a0000 10%, #c0392b 30%, #ff1a1a 48%, #ff4444 52%, #c0392b 70%, #5a0000 90%);
+    background-size: 300% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: shimmer-move 3s linear infinite;
   }
   .login-logo {
     font-family: 'Exo 2', sans-serif;
     font-size: 1.1rem; font-weight: 700; letter-spacing: 4px;
-    color: var(--red2); text-transform: uppercase; text-align: center;
+    color: #1a4a6a; text-transform: uppercase; text-align: center;
     position: relative; z-index: 1;
-    text-shadow: 0 0 12px rgba(231,76,60,0.5);
+    font-size: 0.85rem; letter-spacing: 5px; font-weight: 600;
+    text-shadow: 0 1px 3px rgba(255,255,255,0.5);
   }
   .login-logo span {
     display: block;
     font-family: 'Exo 2', sans-serif;
     font-size: 2.8rem; font-weight: 900; font-style: italic;
-    color: var(--text); letter-spacing: 1px; line-height: 1;
-    text-shadow: 0 0 24px rgba(52,219,180,0.25);
-    animation: logo-glow 2.5s ease-in-out infinite;
+    letter-spacing: 1px; line-height: 1;
   }
   .login-card {
-    background: rgba(13,32,69,0.85);
-    border: 1px solid rgba(52,152,219,0.35);
+    background: linear-gradient(135deg, rgba(255,255,255,0.62) 0%, rgba(255,255,255,0.35) 100%);
+    border: 1px solid rgba(255,255,255,0.82);
+    border-top: 1px solid rgba(255,255,255,0.92);
     border-radius: 16px; padding: 24px; width: 100%;
     position: relative; z-index: 1;
-    box-shadow: 0 0 30px rgba(52,152,219,0.1), inset 0 0 20px rgba(52,152,219,0.04);
-    backdrop-filter: blur(8px);
+    box-shadow: 0 4px 24px rgba(100,140,180,0.2), inset 0 1px 0 rgba(255,255,255,0.9);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
   }
-  .login-card h2 { font-size: 1rem; color: var(--text2); margin-bottom: 16px; text-align: center; }
+  .login-card h2 { font-size: 1rem; color: var(--text); font-weight: 700; margin-bottom: 16px; text-align: center; }
   .select-styled {
-    width: 100%; background: rgba(16,37,88,0.9); border: 1px solid rgba(52,152,219,0.4);
+    width: 100%; background: rgba(255,255,255,0.65); border: 1px solid rgba(255,255,255,0.82);
     color: var(--text); padding: 12px 16px; border-radius: 10px; font-size: 1rem;
     outline: none; appearance: none; -webkit-appearance: none;
     transition: border-color 0.2s, box-shadow 0.2s;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.8);
   }
   .select-styled:focus { border-color: var(--accent2); box-shadow: 0 0 10px rgba(52,152,219,0.3); }
 
@@ -214,14 +222,14 @@
   .bottom-nav {
     position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
     width: 100%; max-width: 480px;
-    background: rgba(10,22,40,0.75);
-    backdrop-filter: blur(20px) saturate(160%);
-    -webkit-backdrop-filter: blur(20px) saturate(160%);
-    border-top: 1px solid rgba(52,152,219,0.18);
-    box-shadow: 0 -2px 20px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04);
+    background: rgba(200,218,232,0.90);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border-top: 1px solid rgba(255,255,255,0.78);
+    box-shadow: 0 -4px 20px rgba(100,140,180,0.18), inset 0 1px 0 rgba(255,255,255,0.85);
     display: flex; z-index: 20; padding-bottom: env(safe-area-inset-bottom, 0px);
   }
-  .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 10px 4px 8px; cursor: pointer; color: var(--text2); font-size: 0.65rem; font-weight: 500; letter-spacing: 0.5px; gap: 3px; transition: color 0.15s; border: none; background: transparent; }
+  .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 10px 4px 8px; cursor: pointer; color: var(--text2); font-size: 0.65rem; font-weight: 600; letter-spacing: 0.5px; gap: 3px; transition: color 0.15s; border: none; background: transparent; }
   .nav-item.active { color: var(--accent2); }
   .nav-icon { font-size: 1.3rem; line-height: 1; }
 
@@ -462,6 +470,40 @@
   .stroke-label { font-size:0.7rem; letter-spacing:2px; text-transform:uppercase; color:var(--accent2); font-weight:800; margin:14px 0 8px; display:flex; align-items:center; gap:8px; }
   .stroke-label::after { content:''; flex:1; height:1px; background:var(--border2); }
   @keyframes chip-select { 0%{transform:scale(1)} 40%{transform:scale(1.08)} 100%{transform:scale(1)} }
+
+  /* LOGIN CINEMATIC */
+  @keyframes wave-drift {
+    0%   { transform: translateX(0) scaleY(1); }
+    50%  { transform: translateX(-30px) scaleY(1.08); }
+    100% { transform: translateX(0) scaleY(1); }
+  }
+  @keyframes wave-drift2 {
+    0%   { transform: translateX(0) scaleY(1); }
+    50%  { transform: translateX(25px) scaleY(0.94); }
+    100% { transform: translateX(0) scaleY(1); }
+  }
+  @keyframes bubble-rise {
+    0%   { transform: translateY(0) scale(1); opacity: 0.5; }
+    100% { transform: translateY(-120vh) scale(0.4); opacity: 0; }
+  }
+  @keyframes logo-drop {
+    0%   { opacity: 0; transform: translateY(-40px) scale(0.92); }
+    60%  { opacity: 1; transform: translateY(6px) scale(1.02); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes card-rise {
+    0%   { opacity: 0; transform: translateY(40px) scale(0.96); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes shimmer-move {
+    0%   { background-position: -200% center; }
+    100% { background-position: 200% center; }
+  }
+  @keyframes float-particle {
+    0%,100% { transform: translateY(0) translateX(0); opacity:0.4; }
+    33%      { transform: translateY(-18px) translateX(8px); opacity:0.7; }
+    66%      { transform: translateY(-8px) translateX(-10px); opacity:0.5; }
+  }
   .insc-chips { display:flex; flex-wrap:wrap; gap:8px; }
   .insc-chip {
     background: rgba(255,255,255,0.5);
@@ -1320,9 +1362,55 @@ function render() {
 function buildLogin() {
   const d = document.createElement('div');
   d.className = 'login-screen';
+
+  // Burbujas flotantes
+  const bubbles = [
+    {s:6,   l:3,  bot:5,  dur:7,  del:0},
+    {s:14,  l:8,  bot:15, dur:9,  del:1.2},
+    {s:9,   l:15, bot:8,  dur:11, del:0.5},
+    {s:22,  l:22, bot:20, dur:13, del:2.1},
+    {s:45,  l:5,  bot:25, dur:18, del:0.3},
+    {s:5,   l:32, bot:3,  dur:8,  del:0.8},
+    {s:18,  l:42, bot:25, dur:10, del:1.7},
+    {s:60,  l:35, bot:10, dur:22, del:1.1},
+    {s:8,   l:55, bot:10, dur:12, del:0.3},
+    {s:30,  l:62, bot:18, dur:15, del:2.8},
+    {s:11,  l:70, bot:6,  dur:9,  del:1.4},
+    {s:7,   l:78, bot:22, dur:7,  del:0.6},
+    {s:25,  l:84, bot:12, dur:14, del:2.3},
+    {s:50,  l:88, bot:30, dur:20, del:0.7},
+    {s:4,   l:93, bot:30, dur:6,  del:1.9},
+    {s:16,  l:10, bot:45, dur:11, del:3.1},
+    {s:38,  l:50, bot:40, dur:17, del:2.5},
+    {s:20,  l:72, bot:45, dur:12, del:0.9},
+    {s:70,  l:18, bot:50, dur:25, del:1.5},
+    {s:12,  l:90, bot:50, dur:9,  del:3.5},
+    {s:55,  l:65, bot:55, dur:21, del:0.4},
+    {s:8,   l:48, bot:60, dur:8,  del:2.0},
+    {s:40,  l:30, bot:65, dur:19, del:1.8},
+    {s:15,  l:80, bot:60, dur:10, del:3.2},
+    {s:80,  l:55, bot:70, dur:28, del:0.6},
+  ];
+  bubbles.forEach(({s,l,bot,dur,del}) => {
+    const b = document.createElement('div');
+    b.className = 'login-bubble';
+    b.style.cssText = `width:${s}px;height:${s}px;left:${l}%;bottom:${bot}%;animation-duration:${dur}s;animation-delay:${del}s;`;
+    d.appendChild(b);
+  });
+
+  // Ondas SVG
+  ['w1','w2','w3'].forEach((cls, i) => {
+    const wave = document.createElement('div');
+    wave.className = 'login-wave ' + cls;
+    const cols = ['rgba(100,170,220,0.8)','rgba(80,160,210,0.7)','rgba(120,190,230,0.6)'];
+    wave.innerHTML = `<svg viewBox="0 0 1440 120" preserveAspectRatio="none"><path d="M0,60 C240,${90+i*10} 480,${30-i*8} 720,60 C960,${90+i*6} 1200,${30-i*6} 1440,60 L1440,120 L0,120 Z" fill="${cols[i]}"/></svg>`;
+    d.appendChild(wave);
+  });
+
+  // Logo
   const logo = document.createElement('div');
   logo.className = 'login-logo';
-  logo.innerHTML = 'Club Natació<span>Terrassa</span>';
+  logo.innerHTML = 'Club Natació<span class="login-logo-terrassa">Terrassa</span>';
   d.appendChild(logo);
 
   const card = document.createElement('div');
@@ -2766,8 +2854,8 @@ function buildRitmoCalc(mbInput) {
   // Input MB
   const inpWrap = document.createElement('div');
   inpWrap.className = 'card';
-  inpWrap.style.cssText = 'padding:16px;margin-bottom:14px';
-  inpWrap.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--accent2);margin-bottom:12px">MARCA BASE 100m CROL</div>' +
+  inpWrap.style.cssText = 'padding:16px;margin-bottom:14px;background:rgba(255,255,255,0.62);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.82);border-radius:14px;box-shadow:0 2px 16px rgba(100,140,180,0.15),inset 0 1px 0 rgba(255,255,255,0.9)';
+  inpWrap.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--text);margin-bottom:12px">MARCA BASE 100m CROL</div>' +
     '<div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:12px">' +
     '<div style="flex:2"><div style="font-size:0.72rem;color:var(--text2);margin-bottom:4px">MIN</div>' +
     '<input id="ritmo-min" type="number" min="0" max="5" placeholder="0" style="width:100%;box-sizing:border-box;font-size:2rem;font-weight:700;text-align:center;padding:12px 8px;border-radius:10px" value="' + (mbInput ? mbInput.m : '') + '"></div>' +
