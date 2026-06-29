@@ -991,6 +991,7 @@ let S = {
   rpeSubmitted: false,
   dayCardOpen: {},
   athDayOpen: {},
+  ritmoMB: null,
   // modals
   commentAthlete: null,
   commentText: '',
@@ -1296,9 +1297,9 @@ function render() {
     const views = [buildCoachSession, buildCoachRPE, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial];
     content.appendChild(views[S.tab]());
   } else {
-    const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión'];
+    const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión','Ritmos'];
     content.appendChild(buildTabs(tabs, S.ath_tab, i => { S.ath_tab = i; if(i===2){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
-    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteInscripcions, buildAthleteSession];
+    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteInscripcions, buildAthleteSession, function(){ const d=document.createElement('div'); const st=document.createElement('div'); st.className='section-title'; st.textContent='CALCULADORA DE RITMOS'; d.appendChild(st); d.appendChild(buildRitmoCalc(S.ritmoMB)); return d; }];
     content.appendChild(views[S.ath_tab]());
   }
 
@@ -2702,6 +2703,128 @@ function buildAthleteSession() {
     d.appendChild(dc);
   }
   return d;
+}
+
+
+// ============================================================
+// RITMO CALCULADORA
+// ============================================================
+const ZONAS = [
+  { label:'AERO B',         pulso:'24 pulso', pct:65,  dist:100, color:'#2980b9' },
+  { label:'UMB. AE.',       pulso:'26 pulso', pct:75,  dist:100, color:'#27ae60' },
+  { label:'UMB. ANER.',     pulso:'28 pulso', pct:80,  dist:100, color:'#f39c12' },
+  { label:'MEDIA CAP. AE.', pulso:'VO2 +8',   pct:85,  dist:100, color:'#e67e22' },
+  { label:'ALTA CAP. AE.',  pulso:'rit400',   pct:90,  dist:100, color:'#e74c3c' },
+  { label:'LACT. CAPAC.',   pulso:'',          pct:100, dist:50,  color:'#8e44ad' },
+  { label:'LACT. POTENCIA', pulso:'',          pct:105, dist:50,  color:'#6c3483' },
+  { label:'ALACT. CAPAC.',  pulso:'',          pct:112, dist:35,  color:'#1a252f' },
+  { label:'ALACT. POT.',    pulso:'',          pct:120, dist:25,  color:'#17202a' },
+];
+
+function secsToMMSS(s) {
+  const m = Math.floor(s / 60);
+  const sec = s - m * 60;
+  return m + ':' + (sec < 10 ? '0' : '') + sec.toFixed(2);
+}
+
+function calcRitmos(mbSecs) {
+  // Mejora 1%
+  const mb = mbSecs * 99 / 100;
+  return ZONAS.map(function(z) {
+    const tZona = mb * (200 - z.pct) / 100;  // tiempo por 100m
+    const tDist = tZona * z.dist / 100;       // tiempo para distancia de la zona
+    const vel = z.dist / tDist;               // m/s
+    return {
+      label: z.label,
+      pulso: z.pulso,
+      pct: z.pct,
+      dist: z.dist,
+      color: z.color,
+      tZona: tZona,     // tiempo por 100m en segs
+      tDist: tDist,     // tiempo para dist (50/35/25m)
+      vel: vel,
+      t100: secsToMMSS(tZona),
+      tDistStr: secsToMMSS(tDist),
+      velStr: vel.toFixed(3)
+    };
+  });
+}
+
+function buildRitmoCalc(mbInput) {
+  const wrap = document.createElement('div');
+
+  // Input MB
+  const inpWrap = document.createElement('div');
+  inpWrap.className = 'card';
+  inpWrap.style.cssText = 'padding:16px;margin-bottom:14px';
+  inpWrap.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--accent2);margin-bottom:10px">MARCA BASE 100m CROL</div>' +
+    '<div style="display:flex;gap:8px;align-items:center">' +
+    '<div style="flex:1"><div style="font-size:0.72rem;color:var(--text2);margin-bottom:4px">MIN</div>' +
+    '<input id="ritmo-min" type="number" min="0" max="5" placeholder="0" style="width:100%;box-sizing:border-box;font-size:1.3rem;text-align:center;padding:10px 6px" value="' + (mbInput ? mbInput.m : '') + '"></div>' +
+    '<div style="font-size:1.5rem;color:var(--text2);padding-top:18px">:</div>' +
+    '<div style="flex:2"><div style="font-size:0.72rem;color:var(--text2);margin-bottom:4px">SEG</div>' +
+    '<input id="ritmo-seg" type="number" min="0" max="59.99" step="0.01" placeholder="58.24" style="width:100%;box-sizing:border-box;font-size:1.3rem;text-align:center;padding:10px 6px" value="' + (mbInput ? mbInput.s : '') + '"></div>' +
+    '<button id="btn-calc-ritmo" class="btn btn-primary" style="margin-top:18px;padding:10px 16px;font-size:0.85rem">CALCULAR</button>' +
+    '</div>';
+  wrap.appendChild(inpWrap);
+
+  if (mbInput && mbInput.mbSecs > 0) {
+    const ritmos = calcRitmos(mbInput.mbSecs);
+    const mbMejorada = mbInput.mbSecs * 99 / 100;
+
+    // MB info
+    const mbCard = document.createElement('div');
+    mbCard.style.cssText = 'padding:8px 14px;margin-bottom:12px;font-size:0.82rem;color:var(--text2)';
+    mbCard.innerHTML = 'MB: <strong style="color:var(--text)">' + secsToMMSS(mbInput.mbSecs) + '</strong> · Con mejora 1%: <strong style="color:var(--accent2)">' + secsToMMSS(mbMejorada) + '</strong>';
+    wrap.appendChild(mbCard);
+
+    // Tabla de zonas
+    ritmos.forEach(function(r) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.style.cssText = 'padding:0;margin-bottom:8px;overflow:hidden;border-left:3px solid ' + r.color;
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:10px 14px 6px';
+      header.innerHTML =
+        '<div>' +
+          '<div style="font-size:0.68rem;font-weight:800;letter-spacing:1.5px;color:' + r.color + '">' + r.label + ' · ' + r.pct + '%' + (r.pulso ? ' · ' + r.pulso : '') + '</div>' +
+        '</div>' +
+        '<div style="font-size:0.72rem;color:var(--text2)">' + r.dist + 'm: <strong style="color:var(--text);font-size:0.95rem">' + r.tDistStr + '</strong></div>';
+      card.appendChild(header);
+
+      const detail = document.createElement('div');
+      detail.style.cssText = 'display:flex;gap:0;border-top:1px solid var(--border)';
+
+      [
+        ['100m', r.t100],
+        [r.dist + 'm', r.tDistStr],
+        ['m/s', r.velStr]
+      ].forEach(function(pair) {
+        const cell = document.createElement('div');
+        cell.style.cssText = 'flex:1;padding:8px 10px;text-align:center;border-right:1px solid var(--border)';
+        cell.innerHTML = '<div style="font-size:0.62rem;color:var(--text2);text-transform:uppercase;margin-bottom:2px">' + pair[0] + '</div><div style="font-size:0.92rem;font-weight:700;color:var(--text)">' + pair[1] + '</div>';
+        detail.appendChild(cell);
+      });
+      card.appendChild(detail);
+      wrap.appendChild(card);
+    });
+  }
+
+  // Handler calcular
+  wrap.addEventListener('click', function(e) {
+    if (e.target.id === 'btn-calc-ritmo') {
+      const m = parseFloat(document.getElementById('ritmo-min').value) || 0;
+      const s = parseFloat(document.getElementById('ritmo-seg').value) || 0;
+      const mbSecs = m * 60 + s;
+      if (mbSecs > 0) {
+        S.ritmoMB = { m, s, mbSecs };
+        render();
+      }
+    }
+  });
+
+  return wrap;
 }
 
 // ============================================================
