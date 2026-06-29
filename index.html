@@ -1297,9 +1297,9 @@ function render() {
     const views = [buildCoachSession, buildCoachRPE, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial];
     content.appendChild(views[S.tab]());
   } else {
-    const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión','Ritmos'];
+    const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión'];
     content.appendChild(buildTabs(tabs, S.ath_tab, i => { S.ath_tab = i; if(i===2){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
-    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteInscripcions, buildAthleteSession, function(){ const d=document.createElement('div'); const st=document.createElement('div'); st.className='section-title'; st.textContent='CALCULADORA DE RITMOS'; d.appendChild(st); d.appendChild(buildRitmoCalc(S.ritmoMB)); return d; }];
+    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteInscripcions, buildAthleteSession];
     content.appendChild(views[S.ath_tab]());
   }
 
@@ -2473,6 +2473,11 @@ function buildAthleteInicio() {
     d.appendChild(noData);
   }
 
+  // ── Calculadora de ritmos ──
+  const stRitmo = document.createElement('div'); stRitmo.className = 'section-title'; stRitmo.style.marginTop='24px'; stRitmo.textContent = 'CALCULADORA DE RITMOS';
+  d.appendChild(stRitmo);
+  d.appendChild(buildRitmoCalc(S.ritmoMB));
+
   return d;
 }
 
@@ -2757,15 +2762,15 @@ function buildRitmoCalc(mbInput) {
   const inpWrap = document.createElement('div');
   inpWrap.className = 'card';
   inpWrap.style.cssText = 'padding:16px;margin-bottom:14px';
-  inpWrap.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--accent2);margin-bottom:10px">MARCA BASE 100m CROL</div>' +
-    '<div style="display:flex;gap:8px;align-items:center">' +
-    '<div style="flex:1"><div style="font-size:0.72rem;color:var(--text2);margin-bottom:4px">MIN</div>' +
-    '<input id="ritmo-min" type="number" min="0" max="5" placeholder="0" style="width:100%;box-sizing:border-box;font-size:1.3rem;text-align:center;padding:10px 6px" value="' + (mbInput ? mbInput.m : '') + '"></div>' +
-    '<div style="font-size:1.5rem;color:var(--text2);padding-top:18px">:</div>' +
-    '<div style="flex:2"><div style="font-size:0.72rem;color:var(--text2);margin-bottom:4px">SEG</div>' +
-    '<input id="ritmo-seg" type="number" min="0" max="59.99" step="0.01" placeholder="58.24" style="width:100%;box-sizing:border-box;font-size:1.3rem;text-align:center;padding:10px 6px" value="' + (mbInput ? mbInput.s : '') + '"></div>' +
-    '<button id="btn-calc-ritmo" class="btn btn-primary" style="margin-top:18px;padding:10px 16px;font-size:0.85rem">CALCULAR</button>' +
-    '</div>';
+  inpWrap.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--accent2);margin-bottom:12px">MARCA BASE 100m CROL</div>' +
+    '<div style="display:flex;gap:10px;align-items:flex-end;margin-bottom:12px">' +
+    '<div style="flex:2"><div style="font-size:0.72rem;color:var(--text2);margin-bottom:4px">MIN</div>' +
+    '<input id="ritmo-min" type="number" min="0" max="5" placeholder="0" style="width:100%;box-sizing:border-box;font-size:2rem;font-weight:700;text-align:center;padding:12px 8px;border-radius:10px" value="' + (mbInput ? mbInput.m : '') + '"></div>' +
+    '<div style="font-size:2rem;color:var(--text2);padding-bottom:10px;font-weight:300">:</div>' +
+    '<div style="flex:4"><div style="font-size:0.72rem;color:var(--text2);margin-bottom:4px">SEG</div>' +
+    '<input id="ritmo-seg" type="number" min="0" max="59.99" step="0.01" placeholder="58.24" style="width:100%;box-sizing:border-box;font-size:2rem;font-weight:700;text-align:center;padding:12px 8px;border-radius:10px" value="' + (mbInput ? mbInput.s : '') + '"></div>' +
+    '</div>' +
+    '<button id="btn-calc-ritmo" class="btn btn-primary" style="width:100%;padding:12px;font-size:0.9rem;letter-spacing:1px">CALCULAR</button>';
   wrap.appendChild(inpWrap);
 
   if (mbInput && mbInput.mbSecs > 0) {
