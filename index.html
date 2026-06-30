@@ -407,7 +407,7 @@
   .day-card-body { padding: 0 14px 14px; border-top: 1px solid var(--border); display: none; }
   .day-card-body.open { display: block; }
   .session-section { margin-top: 10px; }
-  .section-lbl { font-size: 0.7rem; font-weight: 700; letter-spacing: 1px; color: var(--red2); text-transform: uppercase; margin-bottom: 4px; }
+  .section-lbl { font-size: 0.7rem; font-weight: 700; letter-spacing: 1px; color: #fff; text-transform: uppercase; margin-bottom: 4px; opacity: 0.92; }
   .session-lines { font-size: 0.82rem; line-height: 1.7; white-space: pre-wrap; color: var(--text); }
   .at-note { color: var(--gold); }
 
@@ -1001,11 +1001,11 @@ function compColor(type) { return COMP_COLORS[type] || '#9b59b6'; }
 const DAYS_ES = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
 const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const FATIGUE = [
-  {v:1,label:'Fresco',color:'#27ae60'},
-  {v:2,label:'Bien',color:'#8bc34a'},
-  {v:3,label:'Regular',color:'#f39c12'},
-  {v:4,label:'Cansado',color:'#e67e22'},
-  {v:5,label:'Agotado',color:'#e74c3c'}
+  {v:1,label:'Fresco',color:'#1e8449'},
+  {v:2,label:'Bien',color:'#5a9e1e'},
+  {v:3,label:'Regular',color:'#d4860f'},
+  {v:4,label:'Cansado',color:'#d2691e'},
+  {v:5,label:'Agotado',color:'#c0392b'}
 ];
 const COACH_PIN = '1234';
 
@@ -1236,11 +1236,17 @@ function rpeSubmissions(entry) {
 // ============================================================
 function rpeColor(v) {
   if (!v) return '#555';
-  if (v <= 3) return '#27ae60';
-  if (v <= 5) return '#8bc34a';
-  if (v <= 6) return '#f39c12';
-  if (v <= 8) return '#e67e22';
-  return '#e74c3c';
+  if (v <= 3) return '#1e8449';
+  if (v <= 5) return '#5a9e1e';
+  if (v <= 6) return '#d4860f';
+  if (v <= 8) return '#d2691e';
+  return '#c0392b';
+}
+function contrastText(hex) {
+  const c = hex.replace('#','');
+  const r = parseInt(c.substr(0,2),16), g = parseInt(c.substr(2,2),16), b = parseInt(c.substr(4,2),16);
+  const lum = (0.299*r + 0.587*g + 0.114*b) / 255;
+  return lum > 0.6 ? '#1a2a3a' : '#fff';
 }
 
 // ============================================================
@@ -2126,10 +2132,11 @@ function buildCalendar() {
     if (year===today.getFullYear()&&month===today.getMonth()&&day===today.getDate()) cell.classList.add('today');
     if (compDates.has(ds)) {
       const cc = compColor(compDates.get(ds));
-      cell.style.background = cc + '33';
-      cell.style.color = cc;
+      cell.style.background = cc;
+      cell.style.color = contrastText(cc);
       cell.style.fontWeight = '700';
-      cell.style.border = '1px solid ' + cc + '88';
+      cell.style.border = '1px solid ' + cc;
+      cell.style.boxShadow = '0 2px 6px ' + cc + '55';
     }
     else if (sessKeys.has(ds)) cell.classList.add('has-session');
     grid.appendChild(cell);
