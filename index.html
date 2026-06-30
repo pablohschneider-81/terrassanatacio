@@ -58,7 +58,7 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     min-height: 100vh; padding: 24px; gap: 32px;
     position: relative; overflow: hidden;
-    background: linear-gradient(160deg, #b8d4e8 0%, #c8dff0 35%, #d4eae0 65%, #cce0f0 100%);
+    background: linear-gradient(160deg, #d8e4ec 0%, #e2edf4 35%, #e8f0ea 65%, #e0eaf2 100%);
   }
   .login-screen::before { display: none; }
   .login-screen::after { display: none; }
@@ -218,23 +218,36 @@
   .header-name { font-size: 0.95rem; font-weight: 700; color: var(--text); }
   .btn-exit { background: rgba(255,255,255,0.45); border: 1px solid rgba(100,140,180,0.35); color: var(--text); padding: 6px 12px; border-radius: 8px; font-size: 0.8rem; cursor: pointer; font-weight: 600; }
 
-  /* NAV */
+  /* NAV - píldora flotante glass, estilo Instagram */
   .bottom-nav {
-    position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
-    width: 100%; max-width: 480px;
-    background: rgba(200,218,232,0.90);
-    backdrop-filter: blur(24px) saturate(160%);
-    -webkit-backdrop-filter: blur(24px) saturate(160%);
-    border-top: 1px solid rgba(255,255,255,0.78);
-    box-shadow: 0 -4px 20px rgba(100,140,180,0.18), inset 0 1px 0 rgba(255,255,255,0.85);
-    display: flex; z-index: 20; padding-bottom: env(safe-area-inset-bottom, 0px);
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    width: calc(100% - 28px); max-width: 452px;
+    background: rgba(255,255,255,0.55);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid rgba(255,255,255,0.85);
+    border-radius: 24px;
+    box-shadow: 0 8px 28px rgba(30,60,100,0.25), inset 0 1px 0 rgba(255,255,255,0.9);
+    display: flex; align-items: center; justify-content: space-around;
+    padding: 7px 4px; z-index: 20;
+    margin-bottom: env(safe-area-inset-bottom, 0px);
   }
-  .nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 10px 4px 8px; cursor: pointer; color: var(--text2); font-size: 0.65rem; font-weight: 600; letter-spacing: 0.5px; gap: 3px; transition: color 0.15s; border: none; background: transparent; }
-  .nav-item.active { color: var(--accent2); }
-  .nav-icon { font-size: 1.3rem; line-height: 1; }
+  .nav-item {
+    display: flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: 50%;
+    border: none; background: transparent; cursor: pointer;
+    color: var(--text2); transition: all 0.18s;
+  }
+  .nav-item svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .nav-item.active {
+    color: #fff;
+    background: linear-gradient(135deg, #1a6fa8, #3498db);
+    box-shadow: 0 4px 14px rgba(52,152,219,0.45);
+  }
+  .nav-item.active svg { stroke-width: 2.1; }
 
   /* CONTENT */
-  .content { padding: 16px; flex: 1; background: transparent; }
+  .content { padding: 16px 16px 90px; flex: 1; background: transparent; }
   .section-title { font-size: 0.75rem; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--red2); margin-bottom: 12px; }
   .card {
     background: rgba(13,32,69,0.6);
@@ -1552,37 +1565,50 @@ function buildTabs(labels, active, onClick) {
 // ============================================================
 // BOTTOM NAV
 // ============================================================
+const NAV_ICONS = {
+  sesion: '<path d="M9 4h6a1 1 0 0 1 1 1v1h2a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h2V5a1 1 0 0 1 1-1Z"/><path d="M9 4v3h6V4"/><path d="M8 12h8M8 15.5h8M8 9h5"/>',
+  rpe: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  calend: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/><circle cx="8" cy="14" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="14" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="14" r="1" fill="currentColor" stroke="none"/>',
+  inscr: '<path d="M5 21V4"/><path d="M5 4h12l-3 4 3 4H5"/>',
+  equipo: '<circle cx="9" cy="8" r="3"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14c2.8.3 5 2.3 5 5"/>',
+  historial: '<path d="M3 7l2-3h14l2 3"/><path d="M3 7v12a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V7"/><path d="M3 7h18"/><path d="M10 11h4"/>',
+  inicio: '<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/>',
+  mirpe: '<path d="M6.5 16.5 3 13l2-2 3.5 3.5"/><path d="M17.5 7.5 21 11l-2 2-3.5-3.5"/><path d="M9 15l6-6"/><path d="M5 9l2-2M17 19l2-2"/>',
+  natacion: '<circle cx="7" cy="6" r="2"/><path d="M5 10.5 9 8l3 2.5 3-2 4 2"/><path d="M2 16c1.4 1.4 2.8 1.4 4.2 0s2.8-1.4 4.2 0 2.8 1.4 4.2 0 2.8-1.4 4.2 0"/><path d="M2 19.5c1.4 1.4 2.8 1.4 4.2 0s2.8-1.4 4.2 0 2.8 1.4 4.2 0 2.8-1.4 4.2 0"/>'
+};
 function buildBottomNav() {
   const nav = document.createElement('nav');
   nav.className = 'bottom-nav';
   if (S.role === 'coach') {
     const items = [
-      {icon:'📋',label:'Sesión'},
-      {icon:'📊',label:'RPE'},
-      {icon:'📅',label:'Calend.'},
-      {icon:'🏁',label:'Inscr.'},
-      {icon:'👥',label:'Equipo'},
-      {icon:'📁',label:'Historial'}
+      {icon:'sesion',label:'Sesión'},
+      {icon:'rpe',label:'RPE'},
+      {icon:'calend',label:'Calend.'},
+      {icon:'inscr',label:'Inscr.'},
+      {icon:'equipo',label:'Equipo'},
+      {icon:'historial',label:'Historial'}
     ];
     items.forEach((item, i) => {
       const btn = document.createElement('button');
       btn.className = 'nav-item' + (S.tab === i ? ' active' : '');
-      btn.innerHTML = `<span class="nav-icon">${item.icon}</span><span>${item.label}</span>`;
+      btn.title = item.label;
+      btn.innerHTML = `<svg viewBox="0 0 24 24">${NAV_ICONS[item.icon]}</svg>`;
       btn.onclick = () => { S.tab = i; render(); };
       nav.appendChild(btn);
     });
   } else {
     const items = [
-      {icon:'🏠',label:'Inicio'},
-      {icon:'💪',label:'Mi RPE'},
-      {icon:'📅',label:'Calend.'},
-      {icon:'🏁',label:'Inscr.'},
-      {icon:'🏊',label:'Sesión'}
+      {icon:'inicio',label:'Inicio'},
+      {icon:'mirpe',label:'Mi RPE'},
+      {icon:'calend',label:'Calend.'},
+      {icon:'inscr',label:'Inscr.'},
+      {icon:'natacion',label:'Sesión'}
     ];
     items.forEach((item, i) => {
       const btn = document.createElement('button');
       btn.className = 'nav-item' + (S.ath_tab === i ? ' active' : '');
-      btn.innerHTML = `<span class="nav-icon">${item.icon}</span><span>${item.label}</span>`;
+      btn.title = item.label;
+      btn.innerHTML = `<svg viewBox="0 0 24 24">${NAV_ICONS[item.icon]}</svg>`;
       btn.onclick = () => { S.ath_tab = i; render(); };
       nav.appendChild(btn);
     });
@@ -2463,111 +2489,202 @@ function buildAthleteInicio() {
   const today = new Date();
   const todayS = todayStr();
 
-  // Welcome card
-  const wc = document.createElement('div'); wc.className = 'welcome-card';
-  wc.innerHTML = `<div class="welcome-name">👋 ${S.athleteName.split(' ')[0]}</div><div class="welcome-date">${DAYS_ES[today.getDay()]}, ${today.getDate()} de ${MONTHS_ES[today.getMonth()]} ${today.getFullYear()}</div>`;
-  d.appendChild(wc);
+  // ── Cargar historial ──
+  if (!DATA.athleteHist[S.athleteName]) {
+    dbGetAthleteHist(S.athleteName).then(function(h) {
+      DATA.athleteHist[S.athleteName] = h; render();
+    });
+  }
+  const hist = DATA.athleteHist[S.athleteName] || [];
 
-  // Coach message
+  // ── HEADER ──
+  const initials = S.athleteName.split(' ').map(w=>w[0]).slice(0,2).join('');
+  const hdr = document.createElement('div');
+  hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:20px';
+  hdr.innerHTML =
+    '<div>' +
+      '<div style="font-size:0.65rem;color:#4a6a8a;letter-spacing:2px;font-weight:700;text-transform:uppercase">👋 Bienvenido</div>' +
+      '<div style="font-size:1.25rem;font-weight:800;color:#1a2a3a;margin-top:2px">' + S.athleteName + '</div>' +
+      '<div style="font-size:0.7rem;color:#7a9ab8;margin-top:2px">' + DAYS_ES[today.getDay()] + ', ' + today.getDate() + ' de ' + MONTHS_ES[today.getMonth()] + ' ' + today.getFullYear() + '</div>' +
+    '</div>' +
+    '<div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,rgba(41,128,185,0.8),rgba(52,152,219,0.6));border:1.5px solid rgba(255,255,255,0.8);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.9rem;color:#fff;box-shadow:0 2px 12px rgba(41,128,185,0.4)">' + initials + '</div>';
+  d.appendChild(hdr);
+
+  // ── Coach message ──
   const comments = getComments();
   const todayComment = comments[todayS + '_' + S.athleteName];
   if (todayComment) {
-    const cm = document.createElement('div'); cm.className = 'coach-msg';
-    cm.innerHTML = `<div class="coach-msg-lbl">💬 Mensaje del entrenador</div><div style="font-size:0.9rem">${todayComment}</div>`;
+    const cm = document.createElement('div');
+    cm.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-left:3px solid #2980b9;border-radius:12px;padding:12px 14px;margin-bottom:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
+    cm.innerHTML = '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#2980b9;margin-bottom:4px">💬 MENSAJE DEL ENTRENADOR</div><div style="font-size:0.88rem;color:#1a2a3a">' + todayComment + '</div>';
     d.appendChild(cm);
   }
 
-  // Banners de competición: inscripción abierta + próximas
+  // ── Banners competición ──
   const competitions = getCompetitions();
-  const todayDate = todayS;
   competitions.filter(c => {
-    // Aparece 25 días antes del inicio y desaparece el día después de c.end
     const daysToStart = Math.ceil((dateObj(c.start) - today) / 86400000);
-    const endPassed = todayDate > c.end;
-    return !endPassed && daysToStart <= 25;
+    return todayS <= c.end && daysToStart <= 25;
   }).sort((a,b) => a.start.localeCompare(b.start)).forEach(function(c) {
-    const inscOpen = c.inscOpen && c.inscClose && todayDate >= c.inscOpen && todayDate <= c.inscClose;
+    const inscOpen = c.inscOpen && c.inscClose && todayS >= c.inscOpen && todayS <= c.inscClose;
     const diffDays = Math.ceil((dateObj(c.start) - today) / 86400000);
     const daysToClose = c.inscClose ? Math.ceil((dateObj(c.inscClose) - today) / 86400000) : null;
-
-    // Pruebas ya inscritas por este atleta en esta comp
-    const athleteObj = DATA.athletes.find(function(a){ return a.name === S.athleteName; });
-    const myInsc = athleteObj ? DATA.inscriptions.filter(function(i){ return i.competition_id === c.id && i.athlete_id === athleteObj.id; }) : [];
+    const athleteObj = DATA.athletes.find(a => a.name === S.athleteName);
+    const myInsc = athleteObj ? DATA.inscriptions.filter(i => i.competition_id === c.id && i.athlete_id === athleteObj.id) : [];
     const myCount = myInsc.length;
     const maxEv = c.maxEvents || 6;
-
     const banner = document.createElement('div');
-
     if (inscOpen) {
-      const complete = myCount >= maxEv;
-      const hasAny = myCount > 0;
-
+      const complete = myCount >= maxEv, hasAny = myCount > 0;
       if (complete || hasAny) {
-        // Ya inscrito (total o parcial)
-        banner.style.cssText = 'background:rgba(39,174,96,0.12);border:1px solid rgba(39,174,96,0.4);border-radius:14px;padding:14px 16px;margin-bottom:12px;';
-        banner.innerHTML =
-          '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:#27ae60;text-transform:uppercase;margin-bottom:6px">' + (complete ? '✓ INSCRIPCIÓN COMPLETA' : '⚡ INSCRIPCIÓN EN CURSO') + '</div>' +
-          '<div style="font-weight:700;font-size:0.95rem">' + c.name + '</div>' +
-          '<div style="font-size:0.8rem;color:var(--text2);margin-top:4px">' + myCount + ' de ' + maxEv + ' pruebas confirmadas' + (daysToClose !== null && daysToClose >= 0 ? ' · Cierra en ' + daysToClose + ' día' + (daysToClose !== 1 ? 's' : '') : '') + '</div>';
-        if (!complete) {
-          const goBtn = document.createElement('button');
-          goBtn.style.cssText = 'margin-top:10px;width:100%;padding:10px;border-radius:10px;border:1px solid rgba(39,174,96,0.5);background:rgba(39,174,96,0.15);color:#2ecc71;font-weight:700;font-size:0.88rem;cursor:pointer';
-          goBtn.textContent = 'Completar inscripción →';
-          goBtn.onclick = function() { S.ath_tab = 3; S.inscCompId = c.id; render(); };
-          banner.appendChild(goBtn);
-        }
+        banner.style.cssText = 'background:rgba(30,132,73,0.1);border:1px solid rgba(30,132,73,0.4);border-radius:14px;padding:14px 16px;margin-bottom:12px';
+        banner.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:#1e8449;text-transform:uppercase;margin-bottom:6px">' + (complete?'✓ INSCRIPCIÓN COMPLETA':'⚡ INSCRIPCIÓN EN CURSO') + '</div><div style="font-weight:700;font-size:0.95rem;color:#1a2a3a">' + c.name + '</div><div style="font-size:0.8rem;color:#4a6a8a;margin-top:4px">' + myCount + ' de ' + maxEv + ' pruebas' + (daysToClose!==null&&daysToClose>=0?' · Cierra en '+daysToClose+' día'+(daysToClose!==1?'s':''):'') + '</div>';
+        if (!complete) { const gb=document.createElement('button'); gb.style.cssText='margin-top:10px;width:100%;padding:10px;border-radius:10px;border:1px solid rgba(30,132,73,0.5);background:rgba(30,132,73,0.12);color:#1e8449;font-weight:700;font-size:0.88rem;cursor:pointer'; gb.textContent='Completar inscripción →'; gb.onclick=function(){S.ath_tab=3;S.inscCompId=c.id;render();}; banner.appendChild(gb); }
       } else {
-        // Ventana abierta, sin inscribir
-        banner.style.cssText = 'background:rgba(231,76,60,0.1);border:1px solid rgba(231,76,60,0.45);border-radius:14px;padding:14px 16px;margin-bottom:12px;box-shadow:0 0 20px rgba(231,76,60,0.08);';
-        banner.innerHTML =
-          '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--red2);text-transform:uppercase;margin-bottom:6px">🏆 INSCRIPCIÓN ABIERTA</div>' +
-          '<div style="font-weight:700;font-size:0.95rem">' + c.name + '</div>' +
-          '<div style="font-size:0.8rem;color:var(--text2);margin-top:4px">' + (daysToClose !== null && daysToClose >= 0 ? 'Cierra en ' + daysToClose + ' día' + (daysToClose !== 1 ? 's' : '') : '') + ' · Máx. ' + maxEv + ' pruebas</div>';
-        const goBtn = document.createElement('button');
-        goBtn.style.cssText = 'margin-top:10px;width:100%;padding:11px;border-radius:10px;border:none;background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;font-weight:800;font-size:0.92rem;cursor:pointer;box-shadow:0 0 14px rgba(231,76,60,0.35);letter-spacing:0.5px';
-        goBtn.textContent = 'Inscribirme →';
-        goBtn.onclick = function() { S.ath_tab = 3; S.inscCompId = c.id; render(); };
-        banner.appendChild(goBtn);
+        banner.style.cssText = 'background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.35);border-radius:14px;padding:14px 16px;margin-bottom:12px';
+        banner.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:#c0392b;text-transform:uppercase;margin-bottom:6px">🏆 INSCRIPCIÓN ABIERTA</div><div style="font-weight:700;font-size:0.95rem;color:#1a2a3a">' + c.name + '</div><div style="font-size:0.8rem;color:#4a6a8a;margin-top:4px">' + (daysToClose!==null&&daysToClose>=0?'Cierra en '+daysToClose+' día'+(daysToClose!==1?'s':'')+' · ':'') + 'Máx. ' + maxEv + ' pruebas</div>';
+        const gb=document.createElement('button'); gb.style.cssText='margin-top:10px;width:100%;padding:11px;border-radius:10px;border:none;background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;font-weight:800;font-size:0.92rem;cursor:pointer'; gb.textContent='Inscribirme →'; gb.onclick=function(){S.ath_tab=3;S.inscCompId=c.id;render();}; banner.appendChild(gb);
       }
     } else {
-      // Compe próxima sin inscripción abierta
-      const label = diffDays === 0 ? '¡HOY!' : diffDays === 1 ? '¡MAÑANA!' : 'En ' + diffDays + ' días';
-      banner.className = 'alert-comp';
-      banner.innerHTML = '<div class="alert-comp-lbl">🏆 COMPETICIÓN PRÓXIMA</div><div style="font-weight:700">' + c.name + '</div><div style="font-size:0.85rem;color:var(--red2);font-weight:700;margin-top:4px">' + label + '</div>';
+      const label = diffDays===0?'¡HOY!':diffDays===1?'¡MAÑANA!':'En '+diffDays+' días';
+      banner.className='alert-comp';
+      banner.innerHTML='<div class="alert-comp-lbl">🏆 COMPETICIÓN PRÓXIMA</div><div style="font-weight:700;color:#1a2a3a">'+c.name+'</div><div style="font-size:0.85rem;color:#c0392b;font-weight:700;margin-top:4px">'+label+'</div>';
     }
     d.appendChild(banner);
   });
 
-  // ── Gráficos de temporada ──
-  if (!DATA.athleteHist[S.athleteName]) {
-    dbGetAthleteHist(S.athleteName).then(function(h) {
-      DATA.athleteHist[S.athleteName] = h;
-      render();
-    });
+  // ── FUNCIONES DE ZONA ──
+  function zoneColor(r) {
+    if (r===null) return '#7a9ab8';
+    if (r<0.8)  return '#2980b9';
+    if (r<=1.3) return '#1e8449';
+    if (r<=1.5) return '#c0621a';
+    return '#c0392b';
   }
-  const hist = DATA.athleteHist[S.athleteName] || [];
+  function zoneLabel(r) {
+    if (r===null) return 'Sin datos';
+    if (r<0.8)  return '● CARGA BAJA';
+    if (r<=1.3) return '● ÓPTIMO';
+    if (r<=1.5) return '⚠ ATENCIÓN';
+    return '⛔ RIESGO';
+  }
+  function coachMsg(r) {
+    if (r===null) return 'Registra sesiones para ver tu carga.';
+    if (r<0.8)  return '<strong style="color:#2980b9">Carga baja.</strong> Puedes apretar un poco más esta semana.';
+    if (r<=1.3) return '<strong style="color:#1e8449">Zona óptima.</strong> Carga equilibrada — mantén la intensidad.';
+    if (r<=1.5) return '<strong style="color:#c0621a">Atención.</strong> Carga elevada — prioriza el descanso.';
+    return '<strong style="color:#c0392b">Riesgo de sobrecarga.</strong> Reduce la carga esta semana.';
+  }
+
+  const acwrVal = calcACWR(S.athleteName);
+  const acwr = acwrVal !== null ? Math.round(acwrVal * 100) / 100 : null;
+  const col = zoneColor(acwr);
+  const pctAngle = acwr !== null ? Math.min(acwr / 2.0, 1) * 340 - 90 : -90;
+
+  // ── ANILLO ──
+  const ringSection = document.createElement('div');
+  ringSection.style.cssText = 'display:flex;flex-direction:column;align-items:center;margin-bottom:20px';
+  const ringWrap = document.createElement('div');
+  ringWrap.style.cssText = 'position:relative;width:170px;height:170px';
+  ringWrap.innerHTML =
+    '<svg viewBox="0 0 170 170" width="170" height="170" style="position:absolute;top:0;left:0">' +
+      '<defs><filter id="rg2"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>' +
+      '<circle cx="85" cy="85" r="68" fill="none" stroke="rgba(100,140,180,0.12)" stroke-width="13"/>' +
+      '<circle cx="85" cy="85" r="68" fill="none" stroke="#2980b9" stroke-width="13" stroke-dasharray="42.7 384.8" stroke-dashoffset="0" transform="rotate(-90 85 85)" opacity="0.5"/>' +
+      '<circle cx="85" cy="85" r="68" fill="none" stroke="#1e8449" stroke-width="13" stroke-dasharray="106.8 321.7" stroke-dashoffset="-42.7" transform="rotate(-90 85 85)" opacity="0.5"/>' +
+      '<circle cx="85" cy="85" r="68" fill="none" stroke="#c0621a" stroke-width="13" stroke-dasharray="21.4 407.1" stroke-dashoffset="-149.5" transform="rotate(-90 85 85)" opacity="0.5"/>' +
+      '<circle cx="85" cy="85" r="68" fill="none" stroke="#c0392b" stroke-width="13" stroke-dasharray="257.4 170.1" stroke-dashoffset="-170.9" transform="rotate(-90 85 85)" opacity="0.45"/>' +
+      '<circle cx="85" cy="17" r="8" fill="' + col + '" transform="rotate(' + pctAngle + ' 85 85)" filter="url(#rg2)"/>' +
+      '<circle cx="85" cy="17" r="3.5" fill="white" transform="rotate(' + pctAngle + ' 85 85)"/>' +
+    '</svg>' +
+    '<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">' +
+      '<div style="font-size:0.58rem;letter-spacing:2.5px;color:#4a6a8a;font-weight:700;margin-bottom:2px">ACWR</div>' +
+      '<div style="font-size:2.8rem;font-weight:900;line-height:1;color:' + col + '">' + (acwr!==null?acwr.toFixed(2):'—') + '</div>' +
+      '<div style="font-size:0.62rem;font-weight:700;letter-spacing:1px;margin-top:5px;color:' + col + '">' + zoneLabel(acwr) + '</div>' +
+    '</div>';
+  ringSection.appendChild(ringWrap);
+
+  // Mensaje coaching glass
+  const msg = document.createElement('div');
+  msg.style.cssText = 'margin-top:14px;padding:11px 18px;font-size:0.82rem;color:#4a6a8a;line-height:1.5;text-align:center;max-width:300px;background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-radius:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
+  msg.innerHTML = coachMsg(acwr);
+  ringSection.appendChild(msg);
+  d.appendChild(ringSection);
+
+  // ── 4 CARDS GLASS ──
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px';
+
+  // Datos
+  const load7 = hist.filter(h => Math.ceil((today-dateObj(h.date))/86400000)<=6 && Math.ceil((today-dateObj(h.date))/86400000)>=0).reduce((s,h)=>s+h.rpe*(h.duration||80),0);
+  const load7prev = hist.filter(h => { const d=Math.ceil((today-dateObj(h.date))/86400000); return d>=7&&d<=13; }).reduce((s,h)=>s+h.rpe*(h.duration||80),0);
+  const loadDelta = load7prev>0 ? Math.round((load7-load7prev)/load7prev*100) : null;
+
+  const mondayOff = today.getDay()===0?-6:1-today.getDay();
+  const wkStart = new Date(today); wkStart.setDate(today.getDate()+mondayOff);
+  const wkStartS = wkStart.toISOString().slice(0,10);
+  let weekM = 0;
+  for (let i=0;i<7;i++) {
+    const dt=new Date(wkStart); dt.setDate(wkStart.getDate()+i);
+    const ds=dt.toISOString().slice(0,10);
+    const sess=getSession(ds);
+    if (sess) {
+      ['warmUp','preSet','mainSet','mainSetFondo','coolDown'].forEach(k=>{if(sess[k])weekM+=parseMeters(sess[k]);});
+      if(sess.am)['warmUp','preSet','mainSet','mainSetFondo','coolDown'].forEach(k=>{if(sess.am[k])weekM+=parseMeters(sess.am[k]);});
+      if(sess.pm)['warmUp','preSet','mainSet','mainSetFondo','coolDown'].forEach(k=>{if(sess.pm[k])weekM+=parseMeters(sess.pm[k]);});
+    }
+  }
+  const wkSess = hist.filter(h=>h.date>=wkStartS&&h.date<=todayS).length;
+  const last5 = hist.slice(-5);
+  const avg5 = last5.length>0?(last5.reduce((s,h)=>s+h.rpe,0)/last5.length).toFixed(1):null;
+
+  function gc(lbl, body, glowCol) {
+    const c = document.createElement('div');
+    c.style.cssText = 'position:relative;overflow:hidden;padding:14px 15px;background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.82);border-top:1px solid rgba(255,255,255,0.92);border-radius:16px;box-shadow:0 4px 20px rgba(100,140,180,0.14),inset 0 1px 0 rgba(255,255,255,0.9)';
+    c.innerHTML = '<div style="position:absolute;top:0;left:20px;right:20px;height:2px;background:linear-gradient(90deg,transparent,'+glowCol+',transparent);border-radius:2px"></div>' +
+      '<div style="font-size:0.6rem;letter-spacing:1.5px;color:#4a6a8a;font-weight:700;text-transform:uppercase;margin-bottom:7px">' + lbl + '</div>' + body;
+    return c;
+  }
+
+  const deltaHtml = loadDelta!==null ? '<div style="font-size:0.68rem;margin-top:5px;font-weight:700;color:'+(loadDelta>15?'#c0392b':loadDelta>0?'#c0621a':'#1e8449')+'">'+(loadDelta>0?'↑':'↓')+' '+Math.abs(loadDelta)+'% vs sem. ant.</div>' : '';
+  grid.appendChild(gc('⚡ Carga 7d', '<div style="font-size:1.75rem;font-weight:800;color:#1a2a3a;line-height:1">'+Math.round(load7)+'<span style="font-size:0.72rem;color:#4a6a8a;margin-left:3px">UA</span></div>'+deltaHtml, 'rgba(41,128,185,0.6)'));
+
+  const mDisp = weekM>=1000?(weekM/1000).toFixed(1)+'<span style="font-size:0.72rem;color:#4a6a8a;margin-left:3px">km</span>':weekM+'<span style="font-size:0.72rem;color:#4a6a8a;margin-left:3px">m</span>';
+  grid.appendChild(gc('🏊 Metros sem.', '<div style="font-size:1.75rem;font-weight:800;color:#1a2a3a;line-height:1">'+mDisp+'</div>', 'rgba(30,132,73,0.6)'));
+
+  grid.appendChild(gc('📅 Sesiones', '<div style="font-size:1.75rem;font-weight:800;color:#1a2a3a;line-height:1">'+wkSess+'<span style="font-size:0.72rem;color:#4a6a8a;margin-left:3px">esta sem.</span></div>', 'rgba(200,146,10,0.6)'));
+
+  const dotsHtml = last5.length>0 ? last5.map(h=>'<div style="width:28px;height:28px;border-radius:50%;background:'+rpeColor(h.rpe)+';display:flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:800;color:#fff;box-shadow:0 2px 6px rgba(0,0,0,0.15)">'+h.rpe+'</div>').join('') : '<span style="color:#4a6a8a;font-size:0.82rem">Sin datos</span>';
+  const avgHtml = avg5!==null?'<div style="font-size:0.68rem;color:#4a6a8a;margin-top:6px;font-weight:600">Media: <strong style="color:#1a2a3a">'+avg5+'</strong></div>':'';
+  grid.appendChild(gc('🎯 RPE últimas 5', '<div style="display:flex;gap:4px;margin-top:6px">'+dotsHtml+'</div>'+avgHtml, 'rgba(192,98,26,0.6)'));
+
+  d.appendChild(grid);
+
+  // ── BARRA ZONA ──
+  const markerPct = acwr!==null?Math.min(Math.max(acwr/2.0*100,2),97):0;
+  const bar = document.createElement('div');
+  bar.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.82);border-radius:16px;padding:14px 15px;margin-bottom:16px;box-shadow:0 4px 20px rgba(100,140,180,0.14),inset 0 1px 0 rgba(255,255,255,0.9)';
+  bar.innerHTML =
+    '<div style="font-size:0.6rem;letter-spacing:1.5px;color:#4a6a8a;font-weight:700;text-transform:uppercase;margin-bottom:9px">⚖️ Zona de carga aguda:crónica</div>' +
+    '<div style="height:8px;border-radius:4px;background:linear-gradient(to right,#2980b9 0%,#1e8449 35%,#1e8449 58%,#c0621a 73%,#c0392b 100%);position:relative;box-shadow:inset 0 1px 3px rgba(0,0,0,0.1)">' +
+      '<div style="position:absolute;top:-5px;width:18px;height:18px;border-radius:50%;background:white;border:2.5px solid '+col+';transform:translateX(-50%);left:'+markerPct+'%;box-shadow:0 0 10px '+col+'88,0 2px 6px rgba(0,0,0,0.15)"></div>' +
+    '</div>' +
+    '<div style="display:flex;justify-content:space-between;margin-top:9px;font-size:0.58rem;color:#4a6a8a;font-weight:600">' +
+      '<span>Baja<br><span style="color:#2980b9">0.8</span></span>' +
+      '<span style="text-align:center">Óptima<br><span style="color:#1e8449">0.8–1.3</span></span>' +
+      '<span style="text-align:right">Riesgo<br><span style="color:#c0392b">1.5+</span></span>' +
+    '</div>';
+  d.appendChild(bar);
+
+  // ── GRÁFICO RPE ──
   if (hist.length > 1) {
-    const stRPE = document.createElement('div'); stRPE.className = 'section-title'; stRPE.style.marginTop='16px'; stRPE.textContent = 'ÚLTIMAS SESIONES — RPE';
+    const stRPE = document.createElement('div'); stRPE.className = 'section-title'; stRPE.style.marginTop='4px'; stRPE.textContent = 'ÚLTIMAS SESIONES — RPE';
     d.appendChild(stRPE);
     d.appendChild(buildRPEChart(hist.slice(-14)));
-
-    if (hist.length >= 3) {
-      const stACWR = document.createElement('div'); stACWR.className = 'section-title'; stACWR.style.marginTop='16px'; stACWR.textContent = 'CARGA AGUDA:CRÓNICA';
-      d.appendChild(stACWR);
-      d.appendChild(buildACWRChart(hist));
-      const note = document.createElement('div');
-      note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin-top:4px;padding:0 2px;margin-bottom:4px';
-      note.textContent = 'Verde 0.8–1.3 óptimo · Naranja atención · Rojo riesgo';
-      d.appendChild(note);
-    }
-  } else {
-    const noData = document.createElement('div'); noData.style.cssText='padding:20px 0;color:var(--text2);font-size:0.85rem;text-align:center';
-    noData.textContent = 'Registra tus primeras sesiones para ver tus gráficos';
-    d.appendChild(noData);
   }
 
-  // ── Calculadora de ritmos ──
-  const stRitmo = document.createElement('div'); stRitmo.className = 'section-title'; stRitmo.style.marginTop='24px'; stRitmo.textContent = 'CALCULADORA DE RITMOS';
+  // ── CALCULADORA DE RITMOS ──
+  const stRitmo = document.createElement('div'); stRitmo.className = 'section-title'; stRitmo.style.marginTop='16px'; stRitmo.textContent = 'CALCULADORA DE RITMOS';
   d.appendChild(stRitmo);
   d.appendChild(buildRitmoCalc(S.ritmoMB));
 
