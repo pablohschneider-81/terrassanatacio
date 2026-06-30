@@ -802,6 +802,40 @@ async function dbSaveRPE(date, slot, athleteName, rpe, fatigue, note) {
   _rpeRangeLoaded = false;
   return res;
 }
+// ── Wellness (check-in matinal) ────────────────────────────
+let _wellCache = {}; // date -> {athleteName: {sleep,soreness,fatigue,stress,note}}
+async function dbGetDayWellness(date) {
+  if (_wellCache[date]) return _wellCache[date];
+  const rows = await sbFetch('wellness_entries?date=eq.' + date + '&select=*,athletes(name)');
+  const result = {};
+  if (rows) rows.forEach(function(r) {
+    const name = r.athletes && r.athletes.name;
+    if (!name) return;
+    result[name] = { sleep: r.sleep, soreness: r.soreness, fatigue: r.fatigue, stress: r.stress, note: r.note };
+  });
+  _wellCache[date] = result;
+  return result;
+}
+async function dbSaveWellness(date, athleteName, sleep, soreness, fatigue, stress, note) {
+  const athleteId = await dbAthleteId(athleteName);
+  if (!athleteId) return null;
+  const res = await sbFetch('wellness_entries?on_conflict=athlete_id,date', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify({ athlete_id: athleteId, date: date, sleep: sleep, soreness: soreness, fatigue: fatigue, stress: stress, note: note || '' })
+  });
+  delete _wellCache[date];
+  return res;
+}
+async function dbGetAthleteWellnessHist(name) {
+  const athleteId = await dbAthleteId(name);
+  if (!athleteId) return [];
+  const from = new Date(); from.setDate(from.getDate() - 13);
+  const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
+  const rows = await sbFetch('wellness_entries?athlete_id=eq.' + athleteId + '&select=date,sleep,soreness,fatigue,stress&date=gte.' + fromS + '&order=date.asc');
+  return rows || [];
+}
+
 async function dbGetAthleteHist(name) {
   const athleteId = await dbAthleteId(name);
   if (!athleteId) return [];
@@ -1053,6 +1087,10 @@ let S = {
   dayCardOpen: {},
   athDayOpen: {},
   ritmoMB: null,
+  // wellness check-in
+  wellSel: { sleep:null, soreness:null, fatigue:null, stress:null },
+  wellNote: '',
+  wellEditing: false,
   // modals
   commentAthlete: null,
   commentText: '',
@@ -1078,7 +1116,9 @@ const DATA = {
   competitions: [],
   events: [],
   inscriptions: [],
-  athleteHist: {} // name -> [{date,slot,rpe,fatigue}]
+  athleteHist: {}, // name -> [{date,slot,rpe,fatigue}]
+  wellness: {},    // date -> {athleteName: {sleep,soreness,fatigue,stress,note}}
+  athleteWellHist: {} // name -> [{date,sleep,soreness,fatigue,stress}]
 };
 
 // Sync accessors (read from cache)
@@ -1088,6 +1128,47 @@ function getAllSessions() { return DATA.allSessions; }
 function getDayRPE(date) { return DATA.rpe[date] || {}; }
 function getComments() { return DATA.comments; }
 function getCompetitions() { return DATA.competitions; }
+
+// ── Wellness helpers ───────────────────────────────────────
+// Escala 1-5, valencia única: 5 = mejor estado siempre.
+const WELL_QS = [
+  { key:'sleep',    lbl:'Sueño',    lo:'Malísimo',      hi:'Excelente' },
+  { key:'soreness', lbl:'Músculos', lo:'Muy dolorido',  hi:'Frescos' },
+  { key:'fatigue',  lbl:'Energía',  lo:'Agotado',       hi:'Sin fatiga' },
+  { key:'stress',   lbl:'Cabeza',   lo:'Muy estresado', hi:'Tranquilo' }
+];
+const WELL_SCALE_COLORS = { 1:'#c0392b', 2:'#d2691e', 3:'#d4860f', 4:'#5a9e1e', 5:'#1e8449' };
+function getDayWellness(date) { return DATA.wellness[date] || {}; }
+function todayWellness(name) { return getDayWellness(todayStr())[name] || null; }
+function wellComposite(w) {
+  if (!w) return null;
+  const v = [w.sleep, w.soreness, w.fatigue, w.stress];
+  if (v.some(function(x){ return x == null; })) return null;
+  return v.reduce(function(a,b){ return a+b; }, 0); // 4..20
+}
+function wellCompColor(sum) {
+  if (sum == null) return '#7a9ab8';
+  if (sum >= 16) return '#1e8449';
+  if (sum >= 11) return '#d4860f';
+  return '#c0392b';
+}
+function wellCompLabel(sum) {
+  if (sum == null) return '';
+  if (sum >= 16) return 'Buena · listo para cargar';
+  if (sum >= 11) return 'Aceptable · atención';
+  return 'Baja · habla con el coach';
+}
+// Línea base individual: media de composites de los últimos días (excluye hoy).
+function wellBaseline(name) {
+  const hist = DATA.athleteWellHist[name] || [];
+  const t = todayStr();
+  const comps = hist.filter(function(h){ return h.date !== t; })
+                    .map(function(h){ return wellComposite(h); })
+                    .filter(function(c){ return c != null; });
+  if (comps.length < 3) return { mean:null, n:comps.length };
+  const mean = comps.reduce(function(a,b){ return a+b; }, 0) / comps.length;
+  return { mean: Math.round(mean*10)/10, n: comps.length };
+}
 
 async function loadData() {
   // Carga en paralelo: 7 peticiones máximo (antes ~35 en cascada).
@@ -1103,10 +1184,12 @@ async function loadData() {
     dbGetComments().then(c => { DATA.comments = c; }),
     dbGetCompetitions().then(c => { DATA.competitions = c; }),
     dbGetEvents().then(e => { DATA.events = e; }),
-    dbGetInscriptions().then(i => { DATA.inscriptions = i; })
+    dbGetInscriptions().then(i => { DATA.inscriptions = i; }),
+    dbGetDayWellness(todayStr()).then(w => { DATA.wellness[todayStr()] = w; })
   ];
   if (S.athleteName) {
     tasks.push(dbGetAthleteHist(S.athleteName).then(h => { DATA.athleteHist[S.athleteName] = h; }));
+    tasks.push(dbGetAthleteWellnessHist(S.athleteName).then(w => { DATA.athleteWellHist[S.athleteName] = w; }));
   }
   await Promise.all(tasks);
 }
@@ -2505,6 +2588,141 @@ function buildCoachHistorial() {
 // ============================================================
 // ATHLETE: INICIO
 // ============================================================
+function buildHoyStrip() {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'display:flex;gap:7px;margin-bottom:16px';
+  const today = todayStr();
+  const w = todayWellness(S.athleteName);
+  const rpeEntry = normRPE(getDayRPE(today)[S.athleteName]);
+  const slots = daySlots(getSession(today));
+  const items = [{ lb:'Check-in', done: !!w, rpe:false }];
+  if (slots.length === 1) {
+    items.push({ lb:'RPE', done: !!(rpeEntry && rpeEntry[slots[0].slot]), rpe:true });
+  } else if (slots.length > 1) {
+    slots.forEach(function(s){
+      items.push({ lb:'RPE ' + (s.slot==='am'?'AM':'PM'), done: !!(rpeEntry && rpeEntry[s.slot]), rpe:true });
+    });
+  }
+  items.forEach(function(it){
+    const p = document.createElement('div');
+    p.style.cssText = 'flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;border-radius:13px;padding:9px 4px;backdrop-filter:blur(18px) saturate(160%);-webkit-backdrop-filter:blur(18px) saturate(160%);box-shadow:0 3px 14px rgba(40,90,140,0.08);border:1px solid '+(it.done?'rgba(30,132,73,0.4)':'rgba(169,50,43,0.30)')+';background:'+(it.done?'rgba(30,132,73,0.10)':'rgba(169,50,43,0.06)');
+    p.innerHTML = '<span style="font-size:1.05rem;line-height:1">'+(it.done?'✅':'⬜')+'</span>'+
+      '<span style="font-size:0.6rem;font-weight:700;letter-spacing:0.3px;text-transform:uppercase;color:'+(it.done?'#1e8449':'#4a6a8a')+'">'+it.lb+'</span>';
+    if (it.rpe) { p.style.cursor='pointer'; p.onclick=function(){ S.ath_tab=1; render(); }; }
+    wrap.appendChild(p);
+  });
+  return wrap;
+}
+
+function buildWellnessCheckin() {
+  const w = todayWellness(S.athleteName);
+  const card = document.createElement('div');
+  card.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);border:1px solid rgba(255,255,255,0.8);border-radius:16px;padding:16px;margin-bottom:16px;box-shadow:0 4px 18px rgba(40,90,140,0.10),inset 0 1px 0 rgba(255,255,255,0.6)';
+
+  // ── Estado HECHO y no editando → resumen compacto ──
+  if (w && !S.wellEditing) {
+    const sum = wellComposite(w);
+    const col = wellCompColor(sum);
+    const base = wellBaseline(S.athleteName);
+    let baseTxt;
+    if (base.mean == null) baseTxt = 'Construyendo tu base · faltan ' + (3 - base.n) + ' día' + ((3-base.n)!==1?'s':'');
+    else {
+      const diff = sum - base.mean;
+      baseTxt = 'Tu base ' + base.n + 'd: ' + base.mean +
+        (diff <= -3 ? ' · <strong style="color:#c0392b">hoy ' + Math.abs(Math.round(diff)) + ' por debajo</strong>' : ' · hoy ' + (diff>=0?'+':'') + Math.round(diff));
+    }
+    card.innerHTML =
+      '<div style="display:flex;align-items:center;gap:14px">' +
+        '<div style="width:52px;height:52px;border-radius:50%;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:'+col+'18;border:2px solid '+col+'">' +
+          '<div style="font-size:1.15rem;font-weight:900;line-height:1;color:'+col+'">'+sum+'</div>' +
+          '<div style="font-size:0.45rem;font-weight:700;color:#4a6a8a;letter-spacing:0.5px">/20</div>' +
+        '</div>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#1e8449;text-transform:uppercase">✓ Check-in de hoy</div>' +
+          '<div style="font-size:0.9rem;font-weight:700;color:'+col+';margin-top:2px">'+wellCompLabel(sum)+'</div>' +
+          '<div style="font-size:0.66rem;color:#7a9ab8;margin-top:3px;line-height:1.35">'+baseTxt+'</div>' +
+        '</div>' +
+      '</div>';
+    const edit = document.createElement('button');
+    edit.style.cssText = 'margin-top:12px;width:100%;padding:9px;border-radius:10px;border:1px solid rgba(100,150,190,0.3);background:rgba(255,255,255,0.5);color:#4a6a8a;font-weight:700;font-size:0.8rem;cursor:pointer';
+    edit.textContent = 'Editar check-in';
+    edit.onclick = function(){ S.wellSel = { sleep:w.sleep, soreness:w.soreness, fatigue:w.fatigue, stress:w.stress }; S.wellNote = w.note || ''; S.wellEditing = true; render(); };
+    card.appendChild(edit);
+    return card;
+  }
+
+  // ── Formulario (no hecho o editando) ──
+  const sel = S.wellSel;
+  const head = document.createElement('div');
+  head.innerHTML = '<div style="font-size:1.05rem;font-weight:800">¿Cómo amaneciste?</div>' +
+    '<div style="font-size:0.72rem;color:#4a6a8a;margin:2px 0 14px">30 segundos · antes de meterte al agua · 5 = mejor</div>';
+  card.appendChild(head);
+
+  WELL_QS.forEach(function(q){
+    const block = document.createElement('div'); block.style.cssText = 'margin-bottom:14px';
+    block.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">' +
+      '<span style="font-size:0.8rem;font-weight:700">'+q.lbl+'</span>' +
+      '<span style="font-size:0.62rem;color:#7a9ab8;font-weight:600">'+q.lo+' · '+q.hi+'</span></div>';
+    const scale = document.createElement('div'); scale.style.cssText = 'display:flex;gap:6px';
+    for (let i=1;i<=5;i++){
+      const b = document.createElement('div');
+      const on = sel[q.key]===i;
+      b.style.cssText = 'flex:1;aspect-ratio:1.15;border:2px solid '+(on?'rgba(0,0,0,0.45)':'transparent')+';border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.95rem;color:#fff;cursor:pointer;transition:transform .12s;background:'+WELL_SCALE_COLORS[i]+';opacity:'+(on?'1':'0.5')+';'+(on?'transform:scale(1.08);box-shadow:0 3px 10px rgba(0,0,0,0.18)':'');
+      b.textContent = i;
+      b.onclick = (function(key,val){ return function(){ S.wellSel[key]=val; render(); }; })(q.key,i);
+      scale.appendChild(b);
+    }
+    block.appendChild(scale);
+    card.appendChild(block);
+  });
+
+  // Disponibilidad live
+  const sum = wellComposite(sel);
+  const col = wellCompColor(sum);
+  const ready = document.createElement('div');
+  ready.style.cssText = 'display:flex;align-items:center;gap:12px;margin-top:4px;padding-top:14px;border-top:1px solid rgba(255,255,255,0.8)';
+  ready.innerHTML =
+    '<div style="width:48px;height:48px;border-radius:50%;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;background:'+col+'18;border:2px solid '+(sum==null?'#9ab':col)+'">' +
+      '<div style="font-size:1.05rem;font-weight:900;line-height:1;color:'+(sum==null?'#7a9ab8':col)+'">'+(sum==null?'–':sum)+'</div>' +
+      '<div style="font-size:0.45rem;font-weight:700;color:#4a6a8a">/20</div>' +
+    '</div>' +
+    '<div style="flex:1"><div style="font-size:0.62rem;font-weight:700;color:#4a6a8a;text-transform:uppercase;letter-spacing:0.5px">Disponibilidad</div>' +
+      '<div style="font-size:0.88rem;font-weight:700;margin-top:2px;color:'+(sum==null?'#4a6a8a':col)+'">'+(sum==null?'Completa los 4':wellCompLabel(sum))+'</div></div>';
+  card.appendChild(ready);
+
+  const save = document.createElement('button');
+  const complete = sum != null;
+  save.style.cssText = 'width:100%;margin-top:14px;border:none;border-radius:12px;padding:14px;font-weight:800;font-size:0.95rem;cursor:'+(complete?'pointer':'not-allowed')+';background:'+(complete?'linear-gradient(135deg,#1a6fa8,#3498db)':'rgba(120,150,180,0.35)')+';color:#fff;'+(complete?'box-shadow:0 4px 14px rgba(26,111,168,0.35)':'');
+  save.textContent = 'Guardar check-in';
+  save.onclick = function(){
+    if (sum == null) { showToast('Completa los 4', 'error'); return; }
+    save.disabled = true; save.textContent = 'Guardando…';
+    dbSaveWellness(todayStr(), S.athleteName, sel.sleep, sel.soreness, sel.fatigue, sel.stress, S.wellNote).then(function(res){
+      if (res) {
+        S.wellEditing = false;
+        S.wellSel = { sleep:null, soreness:null, fatigue:null, stress:null }; S.wellNote = '';
+        Promise.all([
+          dbGetDayWellness(todayStr()).then(function(wm){ DATA.wellness[todayStr()] = wm; }),
+          dbGetAthleteWellnessHist(S.athleteName).then(function(h){ DATA.athleteWellHist[S.athleteName] = h; })
+        ]).then(render);
+      } else {
+        save.disabled = false; save.textContent = 'Guardar check-in';
+        showToast('No se guardó — reintenta', 'error');
+      }
+    }).catch(function(){ save.disabled=false; save.textContent='Guardar check-in'; showToast('Sin conexión — reintenta','error'); });
+  };
+  card.appendChild(save);
+
+  if (S.wellEditing && w) {
+    const cancel = document.createElement('button');
+    cancel.style.cssText = 'width:100%;margin-top:8px;border:none;background:transparent;color:#7a9ab8;font-weight:700;font-size:0.78rem;cursor:pointer;padding:4px';
+    cancel.textContent = 'Cancelar';
+    cancel.onclick = function(){ S.wellEditing=false; S.wellSel={sleep:null,soreness:null,fatigue:null,stress:null}; render(); };
+    card.appendChild(cancel);
+  }
+  return card;
+}
+
 function buildAthleteInicio() {
   const d = document.createElement('div');
   const today = new Date();
@@ -2531,7 +2749,9 @@ function buildAthleteInicio() {
     '<div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,rgba(41,128,185,0.8),rgba(52,152,219,0.6));border:1.5px solid rgba(255,255,255,0.8);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.9rem;color:#fff;box-shadow:0 2px 12px rgba(41,128,185,0.4)">' + initials + '</div>';
   d.appendChild(hdr);
 
-  // ── Coach message ──
+  // ── Barra HOY + Check-in de bienestar ──
+  d.appendChild(buildHoyStrip());
+  d.appendChild(buildWellnessCheckin());
   const comments = getComments();
   const todayComment = comments[todayS + '_' + S.athleteName];
   if (todayComment) {
