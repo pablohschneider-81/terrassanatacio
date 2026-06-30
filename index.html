@@ -250,14 +250,14 @@
   .content { padding: 16px 16px 90px; flex: 1; background: transparent; }
   .section-title { font-size: 0.75rem; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--red2); margin-bottom: 12px; }
   .card {
-    background: rgba(13,32,69,0.6);
-    backdrop-filter: blur(12px) saturate(140%);
-    -webkit-backdrop-filter: blur(12px) saturate(140%);
-    border: 1px solid rgba(52,152,219,0.18);
+    background: rgba(255,255,255,0.55);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid var(--border);
     border-radius: 12px; padding: 16px; margin-bottom: 12px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04);
+    box-shadow: 0 4px 18px rgba(40,90,140,0.10), inset 0 1px 0 rgba(255,255,255,0.6);
   }
-  .card-title { font-size: 0.9rem; font-weight: 600; margin-bottom: 4px; color: var(--red2); }
+  .card-title { font-size: 0.9rem; font-weight: 700; margin-bottom: 4px; color: var(--text); }
   .card-sub { font-size: 0.8rem; color: var(--text2); }
 
   /* FORM */
@@ -2192,7 +2192,7 @@ function buildCalendar() {
         + '<div class="comp-sub">' + formatDateLabel(c.start) + ' → ' + formatDateLabel(c.end) + '</div>'
         + (c.location ? '<div class="comp-sub" style="margin-top:2px">' + c.location + '</div>' : '')
         + '<div style="margin-top:8px;display:flex;align-items:center;gap:8px">'
-        + '<span class="comp-badge" style="background:' + compColor(c.type) + '33;color:' + compColor(c.type) + '">' + c.type + '</span>'
+        + '<span class="comp-badge" style="background:' + compColor(c.type) + ';color:' + contrastText(compColor(c.type)) + '">' + c.type + '</span>'
         + (isCoach ? '<button class="btn-del comp-del" data-idx="' + getCompetitions().indexOf(c) + '" style="padding:4px 10px">✕</button>' : '')
         + '</div>'
         + '</div>'
@@ -2780,9 +2780,12 @@ function buildAthleteRPE() {
   d.appendChild(st2);
   const fatGrid = document.createElement('div'); fatGrid.className = 'fatigue-grid';
   FATIGUE.forEach(f => {
-    const btn = document.createElement('button'); btn.className = 'fatigue-btn' + (S.fatigueSelected===f.v?' selected':'');
-    btn.textContent = f.label; btn.style.background = f.color + '33'; btn.style.borderColor = S.fatigueSelected===f.v ? f.color : 'transparent';
-    btn.style.color = f.color;
+    const sel = S.fatigueSelected===f.v;
+    const btn = document.createElement('button'); btn.className = 'fatigue-btn' + (sel?' selected':'');
+    btn.textContent = f.label; btn.style.background = f.color; btn.style.color = '#fff';
+    btn.style.opacity = sel ? '1' : '0.92';
+    btn.style.borderColor = sel ? 'rgba(0,0,0,0.55)' : 'transparent';
+    btn.style.fontWeight = sel ? '700' : '600';
     btn.onclick = () => { S.fatigueSelected = f.v; render(); };
     fatGrid.appendChild(btn);
   });
