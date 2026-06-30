@@ -172,7 +172,7 @@
   .pin-btn {
     background: rgba(16,37,88,0.6);
     border: 1px solid rgba(52,152,219,0.3);
-    color: var(--text);
+    color: #fff;
     font-size: 1.5rem; font-weight: 700;
     padding: 20px;
     border-radius: 50%;
@@ -272,7 +272,8 @@
     border-color: var(--accent2);
     box-shadow: 0 0 0 2px rgba(52,152,219,0.15), 0 0 8px rgba(52,152,219,0.2);
   }
-  textarea { resize: vertical; min-height: 90px; line-height: 1.5; }
+  textarea { resize: vertical; min-height: 110px; line-height: 1.6; }
+  textarea.ta-grow { overflow: hidden; resize: none; font-size: 0.95rem; }
   input[type=date]::-webkit-calendar-picker-indicator { filter: invert(0.7); }
 
   /* ALPHA GRID */
@@ -407,7 +408,7 @@
   .day-card-body { padding: 0 14px 14px; border-top: 1px solid var(--border); display: none; }
   .day-card-body.open { display: block; }
   .session-section { margin-top: 10px; }
-  .section-lbl { font-size: 0.7rem; font-weight: 700; letter-spacing: 1px; color: #fff; text-transform: uppercase; margin-bottom: 4px; opacity: 0.92; }
+  .section-lbl { font-size: 0.72rem; font-weight: 700; letter-spacing: 1px; color: var(--accent2); text-transform: uppercase; margin-bottom: 4px; opacity: 1; }
   .session-lines { font-size: 0.82rem; line-height: 1.7; white-space: pre-wrap; color: var(--text); }
   .at-note { color: var(--gold); }
 
@@ -1625,6 +1626,20 @@ function buildBottomNav() {
 // ============================================================
 // COACH: SESIÓN
 // ============================================================
+function autoGrow(ta) {
+  ta.style.height = 'auto';
+  ta.style.height = (ta.scrollHeight + 2) + 'px';
+}
+function makeGrowTextarea(value, placeholder) {
+  const ta = document.createElement('textarea');
+  ta.className = 'ta-grow';
+  ta.placeholder = placeholder || '';
+  ta.value = value || '';
+  // filas iniciales según contenido (inmediato, sin esperar layout)
+  const lines = (value || '').split('\n').length;
+  ta.rows = Math.max(4, lines + 1);
+  return ta;
+}
 function buildCoachSession() {
   const d = document.createElement('div');
   const st = document.createElement('div');
@@ -1712,9 +1727,8 @@ function buildCoachSession() {
       const key = ['pullText','pushText','lowerText'][idx];
       const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = sec;
       d.appendChild(lbl);
-      const ta = document.createElement('textarea');
-      ta.placeholder = `Ejercicios ${sec}...`; ta.value = S[key];
-      ta.oninput = e => { S[key] = e.target.value; };
+      const ta = makeGrowTextarea(S[key], `Ejercicios ${sec}...`);
+      ta.oninput = e => { S[key] = e.target.value; autoGrow(e.target); };
       d.appendChild(ta);
     });
   } else {
@@ -1729,9 +1743,8 @@ function buildCoachSession() {
     sections.forEach(sec => {
       const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = sec.label;
       d.appendChild(lbl);
-      const ta = document.createElement('textarea');
-      ta.placeholder = ''; ta.value = S[sec.key];
-      ta.oninput = e => { S[sec.key] = e.target.value; updateMeters(d); };
+      const ta = makeGrowTextarea(S[sec.key], '');
+      ta.oninput = e => { S[sec.key] = e.target.value; autoGrow(e.target); updateMeters(d); };
       ta.dataset.key = sec.key;
       d.appendChild(ta);
       const mstat = document.createElement('div'); mstat.className = 'meter-stat'; mstat.dataset.mstat = sec.key;
@@ -1827,6 +1840,7 @@ function buildCoachSession() {
   };
   actions.appendChild(pubBtn);
   d.appendChild(actions);
+  requestAnimationFrame(function(){ d.querySelectorAll('textarea.ta-grow').forEach(autoGrow); });
   return d;
 }
 
