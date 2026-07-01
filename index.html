@@ -1864,10 +1864,12 @@ function buildCoachSession() {
   const clearBtn = document.createElement('button');
   clearBtn.className = 'btn btn-secondary'; clearBtn.textContent = 'Limpiar';
   clearBtn.onclick = () => {
-    S.sessionTitle=''; S.sessionRPE=6; S.sessionDuration=80; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
-    S.alphaPhase=null; S.pullText=''; S.pushText=''; S.lowerText='';
-    S.warmUp=''; S.preSet=''; S.mainSet=''; S.mainSetFondo=''; S.coolDown=''; S.packDays=1;
-    render();
+    showConfirm('¿Borrar sesión?', 'Se perderán todos los campos cargados en el editor.', () => {
+      S.sessionTitle=''; S.sessionRPE=6; S.sessionDuration=80; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
+      S.alphaPhase=null; S.pullText=''; S.pushText=''; S.lowerText='';
+      S.warmUp=''; S.preSet=''; S.mainSet=''; S.mainSetFondo=''; S.coolDown=''; S.packDays=1;
+      render();
+    });
   };
   actions.appendChild(clearBtn);
 
@@ -1988,9 +1990,30 @@ function buildCoachRPE() {
     return { name: name, raw: calcACWR(name), info: acwrLabel(calcACWR(name)) };
   }).filter(function(x){ return x.info !== null; });
 
+  // Semáforo: riesgo primero, después atención, óptimo, subcarga, calibrando al final.
+  // Dentro de cada zona, ratio descendente (más alto = más urgente de revisar).
+  const ZONE_ORDER = { 'Riesgo': 0, 'Atención': 1, 'Óptimo': 2, 'Subcarga': 3, 'Calibrando': 4 };
+  acwrData.sort(function(a, b) {
+    const za = ZONE_ORDER[a.info.label], zb = ZONE_ORDER[b.info.label];
+    if (za !== zb) return za - zb;
+    const va = typeof a.raw === 'object' ? a.raw.value : a.raw;
+    const vb = typeof b.raw === 'object' ? b.raw.value : b.raw;
+    return vb - va;
+  });
+
   if (acwrData.length > 0) {
     const at = document.createElement('div'); at.className = 'section-title'; at.textContent = 'CARGA · ACWR';
     d.appendChild(at);
+
+    // Alerta de riesgo: quién está por encima de 1.5 esta semana, de un vistazo.
+    const enRiesgo = acwrData.filter(function(x){ return x.info.label === 'Riesgo'; });
+    if (enRiesgo.length > 0) {
+      const alert = document.createElement('div');
+      alert.style.cssText = 'background:rgba(231,76,60,0.12);border:1px solid rgba(231,76,60,0.4);border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:0.78rem;color:#e74c3c;font-weight:700';
+      alert.textContent = '⚡ ' + enRiesgo.length + ' en zona de riesgo (>1.5): ' + enRiesgo.map(function(x){ return x.name.split(' ')[0]; }).join(', ');
+      d.appendChild(alert);
+    }
+
     const grid = document.createElement('div'); grid.className = 'acwr-grid';
     acwrData.forEach(function(x) {
       const isCal = x.info.calibrating;
