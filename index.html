@@ -1442,9 +1442,9 @@ function render() {
   content.className = 'content';
 
   if (S.role === 'coach') {
-    const tabs = ['Sesión','RPE','Calend.','Inscr.','Equipo','Historial'];
-    content.appendChild(buildTabs(tabs, S.tab, i => { S.tab = i; if(i===2){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
-    const views = [buildCoachSession, buildCoachRPE, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial];
+    const tabs = ['Sesión','RPE','Escuadra','Calend.','Inscr.','Equipo','Historial'];
+    content.appendChild(buildTabs(tabs, S.tab, i => { S.tab = i; if(i===3){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
+    const views = [buildCoachSession, buildCoachRPE, buildCoachSquad, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial];
     content.appendChild(views[S.tab]());
   } else {
     const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión'];
@@ -1985,56 +1985,6 @@ function buildCoachRPE() {
     d.appendChild(sr);
   }
 
-  // ── Panel ACWR (carga aguda:crónica por nadador) ──
-  const acwrData = athletes.map(function(name) {
-    return { name: name, raw: calcACWR(name), info: acwrLabel(calcACWR(name)) };
-  }).filter(function(x){ return x.info !== null; });
-
-  // Semáforo: riesgo primero, después atención, óptimo, subcarga, calibrando al final.
-  // Dentro de cada zona, ratio descendente (más alto = más urgente de revisar).
-  const ZONE_ORDER = { 'Riesgo': 0, 'Atención': 1, 'Óptimo': 2, 'Subcarga': 3, 'Calibrando': 4 };
-  acwrData.sort(function(a, b) {
-    const za = ZONE_ORDER[a.info.label], zb = ZONE_ORDER[b.info.label];
-    if (za !== zb) return za - zb;
-    const va = typeof a.raw === 'object' ? a.raw.value : a.raw;
-    const vb = typeof b.raw === 'object' ? b.raw.value : b.raw;
-    return vb - va;
-  });
-
-  if (acwrData.length > 0) {
-    const at = document.createElement('div'); at.className = 'section-title'; at.textContent = 'CARGA · ACWR';
-    d.appendChild(at);
-
-    // Alerta de riesgo: quién está por encima de 1.5 esta semana, de un vistazo.
-    const enRiesgo = acwrData.filter(function(x){ return x.info.label === 'Riesgo'; });
-    if (enRiesgo.length > 0) {
-      const alert = document.createElement('div');
-      alert.style.cssText = 'background:rgba(231,76,60,0.12);border:1px solid rgba(231,76,60,0.4);border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:0.78rem;color:#e74c3c;font-weight:700';
-      alert.textContent = '⚡ ' + enRiesgo.length + ' en zona de riesgo (>1.5): ' + enRiesgo.map(function(x){ return x.name.split(' ')[0]; }).join(', ');
-      d.appendChild(alert);
-    }
-
-    const grid = document.createElement('div'); grid.className = 'acwr-grid';
-    acwrData.forEach(function(x) {
-      const isCal = x.info.calibrating;
-      // Mostrar SIEMPRE el número. Si calibra, número provisional con asterisco.
-      const num = isCal ? x.raw.value : x.raw;
-      const val = isCal ? (num + '*') : (x.info.icon + ' ' + num);
-      const card = document.createElement('div');
-      card.className = 'acwr-card';
-      card.style.borderColor = x.info.color + '55';
-      card.innerHTML = '<div class="acwr-name">' + x.name.split(' ')[0] + '</div>'
-        + '<div class="acwr-val" style="color:' + x.info.color + '">' + val + '</div>'
-        + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + (isCal ? 'Provisional' : x.info.label) + '</div>';
-      grid.appendChild(card);
-    });
-    d.appendChild(grid);
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin:-4px 0 4px;padding:0 2px';
-    note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5. El * marca valor provisional (faltan ~3 semanas de datos para que sea fiable).';
-    d.appendChild(note);
-  }
-
   // RPE Table
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'HOY — ' + formatDateLabel(today).toUpperCase();
   d.appendChild(st);
@@ -2183,6 +2133,66 @@ function buildCoachRPE() {
     S.commentText = getComments()[dateKey + '_' + btn.dataset.ath] || '';
     render();
   });
+
+  return d;
+}
+
+function buildCoachSquad() {
+  const d = document.createElement('div');
+  const athletes = getAthletes();
+
+  const acwrData = athletes.map(function(name) {
+    return { name: name, raw: calcACWR(name), info: acwrLabel(calcACWR(name)) };
+  }).filter(function(x){ return x.info !== null; });
+
+  // Semáforo: riesgo primero, después atención, óptimo, subcarga, calibrando al final.
+  // Dentro de cada zona, ratio descendente (más alto = más urgente de revisar).
+  const ZONE_ORDER = { 'Riesgo': 0, 'Atención': 1, 'Óptimo': 2, 'Subcarga': 3, 'Calibrando': 4 };
+  acwrData.sort(function(a, b) {
+    const za = ZONE_ORDER[a.info.label], zb = ZONE_ORDER[b.info.label];
+    if (za !== zb) return za - zb;
+    const va = typeof a.raw === 'object' ? a.raw.value : a.raw;
+    const vb = typeof b.raw === 'object' ? b.raw.value : b.raw;
+    return vb - va;
+  });
+
+  const at = document.createElement('div'); at.className = 'section-title'; at.textContent = 'CARGA · ACWR';
+  d.appendChild(at);
+
+  if (acwrData.length === 0) {
+    const empty = document.createElement('div'); empty.className = 'card';
+    empty.innerHTML = '<div class="card-sub">Sin datos suficientes todavía.</div>';
+    d.appendChild(empty);
+    return d;
+  }
+
+  const enRiesgo = acwrData.filter(function(x){ return x.info.label === 'Riesgo'; });
+  if (enRiesgo.length > 0) {
+    const alert = document.createElement('div');
+    alert.style.cssText = 'background:rgba(231,76,60,0.12);border:1px solid rgba(231,76,60,0.4);border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:0.78rem;color:#e74c3c;font-weight:700';
+    alert.textContent = '⚡ ' + enRiesgo.length + ' en zona de riesgo (>1.5): ' + enRiesgo.map(function(x){ return x.name.split(' ')[0]; }).join(', ');
+    d.appendChild(alert);
+  }
+
+  const grid = document.createElement('div'); grid.className = 'acwr-grid';
+  acwrData.forEach(function(x) {
+    const isCal = x.info.calibrating;
+    const num = isCal ? x.raw.value : x.raw;
+    const val = isCal ? (num + '*') : (x.info.icon + ' ' + num);
+    const card = document.createElement('div');
+    card.className = 'acwr-card';
+    card.style.borderColor = x.info.color + '55';
+    card.innerHTML = '<div class="acwr-name">' + x.name.split(' ')[0] + '</div>'
+      + '<div class="acwr-val" style="color:' + x.info.color + '">' + val + '</div>'
+      + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + (isCal ? 'Provisional' : x.info.label) + '</div>';
+    grid.appendChild(card);
+  });
+  d.appendChild(grid);
+
+  const note = document.createElement('div');
+  note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin:-4px 0 4px;padding:0 2px';
+  note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5. El * marca valor provisional (faltan ~3 semanas de datos para que sea fiable).';
+  d.appendChild(note);
 
   return d;
 }
