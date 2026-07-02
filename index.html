@@ -645,7 +645,7 @@ function buildSbBanner() {
 let _athleteCache = null;
 async function dbGetAthletes() {
   if (_athleteCache) return _athleteCache;
-  const rows = await sbFetch('athletes?select=id,name&active=eq.true&order=name');
+  const rows = await sbFetch('athletes?select=id,name,morning_days&active=eq.true&order=name');
   _athleteCache = rows || [];
   return _athleteCache;
 }
@@ -802,6 +802,37 @@ async function dbSaveRPE(date, slot, athleteName, rpe, fatigue, note) {
   _rpeRangeLoaded = false;
   return res;
 }
+// ── Asistencia ───────────────────────────────────────────────
+async function dbGetSessionAttendance(sessionId) {
+  const rows = await sbFetch('attendance?session_id=eq.' + sessionId + '&select=athlete_id,status');
+  const map = {};
+  (rows || []).forEach(r => { map[r.athlete_id] = r.status; });
+  return map;
+}
+async function dbSaveAttendanceBulk(sessionId, statusByAthleteId) {
+  const body = Object.entries(statusByAthleteId).map(([athlete_id, status]) => ({
+    athlete_id, session_id: sessionId, status
+  }));
+  if (body.length === 0) return null;
+  const res = await sbFetch('attendance?on_conflict=athlete_id,session_id', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify(body)
+  });
+  delete _attendancePctCache; // invalida cache de % del mes, se recalcula al próximo pedido
+  return res;
+}
+let _attendancePctCache = null;
+async function dbGetAttendancePct() {
+  // vista attendance_monthly: ya trae name, no hace falta resolver id
+  if (_attendancePctCache) return _attendancePctCache;
+  const rows = await sbFetch('attendance_monthly?select=name,attendance_pct');
+  const map = {};
+  (rows || []).forEach(r => { map[r.name] = r.attendance_pct; });
+  _attendancePctCache = map;
+  return map;
+}
+
 // ── Wellness (check-in matinal) ────────────────────────────
 let _wellCache = {}; // date -> {athleteName: {sleep,soreness,fatigue,stress,note}}
 async function dbGetDayWellness(date) {
@@ -852,6 +883,27 @@ async function dbGetAthleteHist(name) {
     h.duration = dur;
   });
   return rows;
+}
+
+// Carga en un solo request el historial de TODOS los atletas (para el panel
+// Escuadra del coach). Devuelve un mapa name -> [{date,slot,rpe,fatigue,duration}],
+// mismo shape que dbGetAthleteHist para que calcACWR() no distinga origen.
+async function dbGetAllAthleteHist() {
+  const from = new Date(); from.setDate(from.getDate() - 27);
+  const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
+  const rows = await sbFetch('rpe_entries?select=date,slot,rpe,fatigue,athletes(name)&date=gte.' + fromS + '&order=date.asc');
+  const map = {};
+  if (!rows) return map;
+  rows.forEach(function(r) {
+    const name = r.athletes && r.athletes.name;
+    if (!name) return;
+    let dur = 80;
+    const day = DATA.sessions && DATA.sessions[r.date];
+    if (day && day[r.slot] && day[r.slot].duration) dur = day[r.slot].duration;
+    if (!map[name]) map[name] = [];
+    map[name].push({ date: r.date, slot: r.slot, rpe: r.rpe, fatigue: r.fatigue, duration: dur });
+  });
+  return map;
 }
 
 // ── Comments ───────────────────────────────────────────────
@@ -1102,6 +1154,53 @@ let S = {
 // ============================================================
 // LOCALSTORAGE HELPERS
 // ============================================================
+const RPE_QUEUE_KEY = 'cnt_rpe_queue';
+
+function getRPEQueue() {
+  try { return JSON.parse(localStorage.getItem(RPE_QUEUE_KEY)) || []; }
+  catch (e) { return []; }
+}
+function saveRPEQueue(arr) {
+  try { localStorage.setItem(RPE_QUEUE_KEY, JSON.stringify(arr)); } catch (e) { /* storage lleno/bloqueado: se pierde, no hay más margen */ }
+}
+// Entrada pendiente (si existe) para date+slot+atleta, para que la UI la trate como ya enviada.
+function findQueuedRPE(date, slot, athleteName) {
+  return getRPEQueue().find(function(q) { return q.date === date && q.slot === slot && q.athleteName === athleteName; }) || null;
+}
+function queueRPE(date, slot, athleteName, rpe, fatigue, note) {
+  const q = getRPEQueue();
+  // si ya había una entrada pendiente para el mismo date+slot+atleta, la reemplaza (no duplica)
+  const filtered = q.filter(function(x){ return !(x.date === date && x.slot === slot && x.athleteName === athleteName); });
+  filtered.push({ date, slot, athleteName, rpe, fatigue, note: note || '', ts: Date.now() });
+  saveRPEQueue(filtered);
+}
+let _flushingRPEQueue = false;
+async function flushRPEQueue() {
+  if (_flushingRPEQueue) return;
+  const q = getRPEQueue();
+  if (q.length === 0) return;
+  _flushingRPEQueue = true;
+  const remaining = [];
+  for (const item of q) {
+    const res = await dbSaveRPE(item.date, item.slot, item.athleteName, item.rpe, item.fatigue, item.note);
+    if (!res) {
+      if (SB_STATUS === 'offline') {
+        // seguimos sin red: dejamos esta y el resto tal cual, no tiene sentido seguir intentando ahora
+        remaining.push(item);
+        remaining.push.apply(remaining, q.slice(q.indexOf(item) + 1));
+        break;
+      }
+      // fallo no-offline (ej. clave inválida): se descarta para no reintentar infinito con datos malos
+      console.error('RPE en cola descartado (fallo no offline)', item);
+      continue;
+    }
+    // éxito: no se agrega a remaining
+  }
+  saveRPEQueue(remaining);
+  _flushingRPEQueue = false;
+  if (remaining.length < q.length) render();
+}
+window.addEventListener('online', flushRPEQueue);
 
 // ============================================================
 // DATA CACHE — populated async before render
@@ -1117,6 +1216,7 @@ const DATA = {
   events: [],
   inscriptions: [],
   athleteHist: {}, // name -> [{date,slot,rpe,fatigue}]
+  allHistLoaded: false, // true cuando ya se cargó el historial de todos (panel Escuadra)
   wellness: {},    // date -> {athleteName: {sleep,soreness,fatigue,stress,note}}
   athleteWellHist: {} // name -> [{date,sleep,soreness,fatigue,stress}]
 };
@@ -1192,6 +1292,7 @@ async function loadData() {
     tasks.push(dbGetAthleteWellnessHist(S.athleteName).then(w => { DATA.athleteWellHist[S.athleteName] = w; }));
   }
   await Promise.all(tasks);
+  if (getRPEQueue().length > 0) flushRPEQueue(); // no bloquea el render; corre en paralelo
 }
 
 async function renderAsync() {
@@ -1442,9 +1543,9 @@ function render() {
   content.className = 'content';
 
   if (S.role === 'coach') {
-    const tabs = ['Sesión','RPE','Escuadra','Calend.','Inscr.','Equipo','Historial'];
+    const tabs = ['Sesión','RPE','Escuadra','Calend.','Inscr.','Equipo','Historial','Asist.'];
     content.appendChild(buildTabs(tabs, S.tab, i => { S.tab = i; if(i===3){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
-    const views = [buildCoachSession, buildCoachRPE, buildCoachSquad, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial];
+    const views = [buildCoachSession, buildCoachRPE, buildCoachSquad, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial, buildCoachAttendance];
     content.appendChild(views[S.tab]());
   } else {
     const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión'];
@@ -1663,6 +1764,7 @@ const NAV_ICONS = {
   equipo: '<circle cx="9" cy="8" r="3"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14c2.8.3 5 2.3 5 5"/>',
   escuadra: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
   historial: '<path d="M3 7l2-3h14l2 3"/><path d="M3 7v12a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V7"/><path d="M3 7h18"/><path d="M10 11h4"/>',
+  asistencia: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10.5l2.5 2.5L16 8"/>',
   inicio: '<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/>',
   mirpe: '<path d="M6.5 16.5 3 13l2-2 3.5 3.5"/><path d="M17.5 7.5 21 11l-2 2-3.5-3.5"/><path d="M9 15l6-6"/><path d="M5 9l2-2M17 19l2-2"/>',
   natacion: '<circle cx="7" cy="6" r="2"/><path d="M5 10.5 9 8l3 2.5 3-2 4 2"/><path d="M2 16c1.4 1.4 2.8 1.4 4.2 0s2.8-1.4 4.2 0 2.8 1.4 4.2 0 2.8-1.4 4.2 0"/><path d="M2 19.5c1.4 1.4 2.8 1.4 4.2 0s2.8-1.4 4.2 0 2.8 1.4 4.2 0 2.8-1.4 4.2 0"/>'
@@ -1678,7 +1780,8 @@ function buildBottomNav() {
       {icon:'calend',label:'Calend.'},
       {icon:'inscr',label:'Inscr.'},
       {icon:'equipo',label:'Equipo'},
-      {icon:'historial',label:'Historial'}
+      {icon:'historial',label:'Historial'},
+      {icon:'asistencia',label:'Asist.'}
     ];
     items.forEach((item, i) => {
       const btn = document.createElement('button');
@@ -2143,6 +2246,21 @@ function buildCoachSquad() {
   const d = document.createElement('div');
   const athletes = getAthletes();
 
+  // ── Cargar historial de todos + asistencia (una sola vez por sesión de la app) ──
+  if (!DATA.allHistLoaded || !DATA.attendancePct) {
+    Promise.all([
+      DATA.allHistLoaded ? Promise.resolve() : dbGetAllAthleteHist().then(function(map) {
+        Object.keys(map).forEach(function(name) { DATA.athleteHist[name] = map[name]; });
+        DATA.allHistLoaded = true;
+      }),
+      DATA.attendancePct ? Promise.resolve() : dbGetAttendancePct().then(function(map) { DATA.attendancePct = map; })
+    ]).then(render);
+    const loading = document.createElement('div'); loading.className = 'card';
+    loading.innerHTML = '<div class="card-sub">Cargando carga de los últimos 28 días…</div>';
+    d.appendChild(loading);
+    return d;
+  }
+
   const acwrData = athletes.map(function(name) {
     return { name: name, raw: calcACWR(name), info: acwrLabel(calcACWR(name)) };
   }).filter(function(x){ return x.info !== null; });
@@ -2181,12 +2299,23 @@ function buildCoachSquad() {
     const isCal = x.info.calibrating;
     const num = isCal ? x.raw.value : x.raw;
     const val = isCal ? (num + '*') : (x.info.icon + ' ' + num);
+
+    const hist = DATA.athleteHist[x.name] || [];
+    const lastRpe = hist.length > 0 ? hist[hist.length - 1] : null; // hist viene asc por fecha
+    const rpeStr = lastRpe ? 'RPE ' + lastRpe.rpe + ' · ' + lastRpe.date.slice(5).split('-').reverse().join('/') : 'Sin RPE';
+
+    const attPct = DATA.attendancePct[x.name];
+    const attCol = attPct == null ? '#7a9ab8' : attPct >= 85 ? '#1e8449' : attPct >= 70 ? '#c0621a' : '#c0392b';
+    const attStr = attPct == null ? '—' : attPct + '%';
+
     const card = document.createElement('div');
     card.className = 'acwr-card';
     card.style.borderColor = x.info.color + '55';
     card.innerHTML = '<div class="acwr-name">' + x.name.split(' ')[0] + '</div>'
       + '<div class="acwr-val" style="color:' + x.info.color + '">' + val + '</div>'
-      + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + (isCal ? 'Provisional' : x.info.label) + '</div>';
+      + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + (isCal ? 'Provisional' : x.info.label) + '</div>'
+      + '<div style="font-size:0.6rem;color:#7a9ab8;margin-top:4px;border-top:1px solid rgba(100,140,180,0.15);padding-top:4px">' + rpeStr + '</div>'
+      + '<div style="font-size:0.68rem;font-weight:700;color:' + attCol + '">Asist. ' + attStr + '</div>';
     grid.appendChild(card);
   });
   d.appendChild(grid);
@@ -2452,6 +2581,133 @@ function buildCoachTeam() {
 // ============================================================
 // COACH: HISTORIAL
 // ============================================================
+// ── Asistencia (tab coach) ──────────────────────────────────
+const DOW_CODE = ['sun','mon','tue','wed','thu','fri','sat'];
+S.attSelDate = S.attSelDate || todayStr();
+S.attDraft = S.attDraft || {}; // { [slot]: { [athleteId]: status } }
+
+function attRosterForSlot(slot, dateStr) {
+  const dow = dateObj(dateStr).getDay();
+  const isSat = dow === 6;
+  const athletes = DATA.athletes; // [{id,name,morning_days}]
+  if (slot === 'pm' || isSat) return athletes; // tarde y sábado: todos, sin excepción
+  const code = DOW_CODE[dow];
+  return athletes.filter(a => Array.isArray(a.morning_days) && a.morning_days.includes(code));
+}
+
+function buildCoachAttendance() {
+  const d = document.createElement('div');
+  const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'ASISTENCIA';
+  d.appendChild(st);
+
+  const dateRow = document.createElement('div');
+  dateRow.style.cssText = 'margin-bottom:14px';
+  const dateInput = document.createElement('input');
+  dateInput.type = 'date';
+  dateInput.value = S.attSelDate;
+  dateInput.style.cssText = 'padding:8px 12px;border-radius:10px;border:1px solid rgba(100,140,180,0.25);font-size:0.85rem';
+  dateInput.onchange = function() { S.attSelDate = dateInput.value; S.attDraft = {}; render(); };
+  dateRow.appendChild(dateInput);
+  d.appendChild(dateRow);
+
+  if (!DATA.athletes || DATA.athletes.length === 0) {
+    const empty = document.createElement('div'); empty.className = 'card';
+    empty.innerHTML = '<div class="card-sub">Cargando nadadores…</div>';
+    d.appendChild(empty);
+    return d;
+  }
+
+  if (S._attSessionDate !== S.attSelDate) {
+    S._attSessionDate = S.attSelDate;
+    dbGetSession(S.attSelDate).then(function(sess) {
+      S._attSession = sess;
+      ['am','pm'].forEach(function(slot) {
+        if (sess && sess[slot] && sess[slot]._id) {
+          dbGetSessionAttendance(sess[slot]._id).then(function(map) {
+            S.attDraft[slot] = map;
+            render();
+          });
+        }
+      });
+      render();
+    });
+    const loading = document.createElement('div'); loading.className = 'card';
+    loading.innerHTML = '<div class="card-sub">Cargando sesión…</div>';
+    d.appendChild(loading);
+    return d;
+  }
+
+  const sess = S._attSession;
+  if (!sess || (!sess.am && !sess.pm)) {
+    const empty = document.createElement('div'); empty.className = 'card';
+    empty.innerHTML = '<div class="card-sub">No hay entreno cargado ese día.</div>';
+    d.appendChild(empty);
+    return d;
+  }
+
+  ['am', 'pm'].forEach(function(slot) {
+    const s = sess[slot];
+    if (!s || !s._id) return;
+    const sessionId = s._id;
+    const roster = attRosterForSlot(slot, S.attSelDate);
+    S.attDraft[slot] = S.attDraft[slot] || {};
+
+    const panel = document.createElement('div'); panel.className = 'card'; panel.style.marginBottom = '14px';
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px';
+    hdr.innerHTML = '<div style="font-weight:700;font-size:0.9rem;color:#1a2a3a">' + (slot === 'am' ? '☀️ Mañana' : '🌙 Tarde') + ' — ' + (s.title || 'Sin título') + '</div>' +
+      '<div style="font-size:0.72rem;color:#7a9ab8">' + roster.length + ' convocados</div>';
+    panel.appendChild(hdr);
+
+    roster.forEach(function(a) {
+      const status = S.attDraft[slot][a.id] || 'present';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 2px;border-bottom:1px solid rgba(100,140,180,0.12)';
+      const name = document.createElement('span');
+      name.style.cssText = 'font-size:0.85rem;font-weight:600;color:#1a2a3a';
+      name.textContent = a.name;
+      row.appendChild(name);
+
+      const toggle = document.createElement('div');
+      toggle.style.cssText = 'display:flex;gap:4px';
+      [['present','Presente','#1e8449','rgba(30,132,73,0.12)'],
+       ['absent','Ausente','#c0392b','rgba(192,57,43,0.12)'],
+       ['justified','Justif.','#c0621a','rgba(192,98,26,0.12)']].forEach(function(opt) {
+        const btn = document.createElement('button');
+        const active = status === opt[0];
+        btn.textContent = opt[1];
+        btn.style.cssText = 'border:none;font-size:0.68rem;font-weight:700;padding:5px 9px;border-radius:8px;cursor:pointer;' +
+          (active ? 'background:' + opt[3] + ';color:' + opt[2] : 'background:rgba(100,140,180,0.08);color:#7a9ab8');
+        btn.onclick = function() {
+          S.attDraft[slot][a.id] = opt[0];
+          render();
+        };
+        toggle.appendChild(btn);
+      });
+      row.appendChild(toggle);
+      panel.appendChild(row);
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Cerrar sesión y guardar';
+    closeBtn.style.cssText = 'margin-top:10px;width:100%;padding:10px;border-radius:10px;border:none;background:linear-gradient(135deg,#2980b9,#3498db);color:#fff;font-weight:700;font-size:0.85rem;cursor:pointer';
+    closeBtn.onclick = function() {
+      closeBtn.disabled = true; closeBtn.textContent = 'Guardando…';
+      const finalMap = {};
+      roster.forEach(function(a) { finalMap[a.id] = S.attDraft[slot][a.id] || 'present'; });
+      dbSaveAttendanceBulk(sessionId, finalMap).then(function(res) {
+        if (!res) { alert('Error al guardar. Reintentá.'); closeBtn.disabled = false; closeBtn.textContent = 'Cerrar sesión y guardar'; return; }
+        S.attDraft[slot] = finalMap;
+        render();
+      });
+    };
+    panel.appendChild(closeBtn);
+    d.appendChild(panel);
+  });
+
+  return d;
+}
+
 function buildCoachHistorial() {
   const d = document.createElement('div');
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'HISTORIAL DE SESIONES';
@@ -2887,6 +3143,19 @@ function buildAthleteInicio() {
   ringSection.appendChild(msg);
   d.appendChild(ringSection);
 
+  // ── ASISTENCIA (mes actual) ──
+  if (!DATA.attendancePct) {
+    dbGetAttendancePct().then(function(map) { DATA.attendancePct = map; render(); });
+  } else {
+    const pct = DATA.attendancePct[S.athleteName];
+    const attCol = pct == null ? '#7a9ab8' : pct >= 85 ? '#1e8449' : pct >= 70 ? '#c0621a' : '#c0392b';
+    const attCard = document.createElement('div');
+    attCard.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-radius:14px;padding:14px 16px;margin-bottom:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
+    attCard.innerHTML = '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#4a6a8a;text-transform:uppercase;margin-bottom:4px">ASISTENCIA · MES ACTUAL</div>' +
+      '<div style="font-size:1.6rem;font-weight:900;color:' + attCol + '">' + (pct == null ? '—' : pct + '%') + '</div>';
+    d.appendChild(attCard);
+  }
+
   // ── 4 CARDS GLASS ──
   const grid = document.createElement('div');
   grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px';
@@ -2978,7 +3247,13 @@ function buildAthleteRPE() {
   const double = slots.length > 1;
 
   // Determine active slot: S.rpeSlot ('am'|'pm'), default first un-submitted
-  const entry = normRPE(getDayRPE(today)[S.athleteName]);
+  const entry = normRPE(getDayRPE(today)[S.athleteName]) || { am: null, pm: null };
+  const queuedAM = findQueuedRPE(today, 'am', S.athleteName);
+  const queuedPM = findQueuedRPE(today, 'pm', S.athleteName);
+  // Lo que está en cola (aún no confirmado por el servidor) cuenta como "enviado"
+  // para la UI: evita que el atleta lo cargue dos veces mientras no hay red.
+  if (queuedAM && !entry.am) { entry.am = { rpe: queuedAM.rpe, fatigue: queuedAM.fatigue, pending: true }; }
+  if (queuedPM && !entry.pm) { entry.pm = { rpe: queuedPM.rpe, fatigue: queuedPM.fatigue, pending: true }; }
   if (!S.rpeSlot || !double) {
     if (double) {
       S.rpeSlot = (entry && entry.am) ? 'pm' : 'am';
@@ -3017,8 +3292,11 @@ function buildAthleteRPE() {
   const slotEntry = entry ? entry[double ? S.rpeSlot : 'am'] : null;
   if (slotEntry) {
     const fat = FATIGUE.find(function(f){return f.v===slotEntry.fatigue;}) || FATIGUE[0];
+    const pendingNote = slotEntry.pending
+      ? '<div style="margin-top:10px;font-size:0.74rem;color:#f39c12;font-weight:700">⏳ Guardado en el dispositivo — se enviará solo cuando vuelva la conexión</div>'
+      : '';
     const cs = document.createElement('div'); cs.className = 'confirm-screen';
-    cs.innerHTML = '<div class="confirm-emoji">✅</div><div class="confirm-rpe" style="color:' + rpeColor(slotEntry.rpe) + '">' + slotEntry.rpe + '</div><div class="confirm-label">RPE registrado · <span style="color:' + fat.color + '">' + fat.label + '</span></div><div style="margin-top:20px;font-size:0.8rem;color:var(--text2)">Ya registraste tu RPE' + (double ? ' de este turno' : ' hoy') + '</div>';
+    cs.innerHTML = '<div class="confirm-emoji">✅</div><div class="confirm-rpe" style="color:' + rpeColor(slotEntry.rpe) + '">' + slotEntry.rpe + '</div><div class="confirm-label">RPE registrado · <span style="color:' + fat.color + '">' + fat.label + '</span></div><div style="margin-top:20px;font-size:0.8rem;color:var(--text2)">Ya registraste tu RPE' + (double ? ' de este turno' : ' hoy') + '</div>' + pendingNote;
     d.appendChild(cs);
     return d;
   }
@@ -3079,7 +3357,14 @@ function buildAthleteRPE() {
     submitBtn.disabled = true; submitBtn.textContent = 'Guardando…';
     dbSaveRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote).then(function(res) {
       if (!res) {
-        // no se guardó (sin conexión, clave inválida, etc.) — NO confirmar
+        if (SB_STATUS === 'offline') {
+          // Sin red: no se pierde. Se guarda en el dispositivo y se reenvía solo al reconectar.
+          queueRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote);
+          S.rpeSubmitted = true;
+          render();
+          return;
+        }
+        // fallo NO relacionado a conexión (ej. clave inválida) — ahí sí hay que reintentar a mano
         submitBtn.disabled = false;
         submitBtn.textContent = '⚠ No se guardó — reintenta';
         submitBtn.style.background = '#e74c3c';
@@ -3089,10 +3374,10 @@ function buildAthleteRPE() {
       S.rpeSubmitted = true;
       renderAsync();
     }).catch(function() {
-      submitBtn.disabled = false;
-      submitBtn.textContent = '⚠ Sin conexión — reintenta';
-      submitBtn.style.background = '#e74c3c';
-      setTimeout(function(){ submitBtn.textContent = btnLabel; submitBtn.style.background = ''; }, 2800);
+      // fetch tiró excepción (típico de estar realmente offline): mismo tratamiento que arriba
+      queueRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote);
+      S.rpeSubmitted = true;
+      render();
     });
   };
   d.appendChild(submitBtn);
