@@ -1458,7 +1458,7 @@ function renderTextWithNotes(text) {
     if (opener) {
       insideBlock = true;
       const label = opener[1] + '\u00d7';
-      out.push(`<span style="color:var(--accent2);font-weight:700;letter-spacing:1px">${label}{</span>`);
+      out.push(`\n<span style="color:var(--accent2);font-weight:700;letter-spacing:1px">${label}{</span>`);
       if (opener[2].trim()) {
         out.push('\n  ' + renderInlineNotes(opener[2].trim()));
       }
