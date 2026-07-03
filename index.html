@@ -1525,7 +1525,7 @@ function calcACWR(athleteName) {
 }
 function acwrLabel(ratio) {
   if (ratio === null) return null;
-  if (typeof ratio === 'object' && ratio.calibrating) return { label: 'Calibrando', color: '#a8bfd4', icon: '○', calibrating: true };
+  if (typeof ratio === 'object' && ratio.calibrating) return { label: 'Calibrando', color: '#5a7085', icon: '○', calibrating: true };
   if (ratio < 0.8)  return { label: 'Subcarga', color: '#3498db', icon: '↓' };
   if (ratio <= 1.3) return { label: 'Óptimo',   color: '#27ae60', icon: '✓' };
   if (ratio <= 1.5) return { label: 'Atención', color: '#f39c12', icon: '⚠' };
