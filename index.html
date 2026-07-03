@@ -2789,36 +2789,42 @@ function buildCoachHistorial() {
     info.innerHTML = '<div class="hist-title">' + titleStr + '</div><div class="hist-meta"><span class="tag">' + first.phase + '</span>' + (first.alphaPhase ? '<span class="tag">' + first.alphaPhase + '</span>' : '') + '<span>RPE obj: ' + targetStr + '</span></div>';
     const arrow = document.createElement('span'); arrow.style.color = 'var(--text2)'; arrow.textContent = S.histSessionOpen[s.date] ? '▲' : '▼';
 
-    // Botón editar entreno (solo coach)
-    const editBtn = document.createElement('button');
-    editBtn.className = 'sess-del-btn';
-    editBtn.innerHTML = '✏️';
-    editBtn.title = 'Editar sesión';
-    editBtn.style.marginRight = '4px';
-    editBtn.onclick = function(ev) {
-      ev.stopPropagation();
-      const firstSlot = hdrSlots[0] ? hdrSlots[0].sess : null;
-      if (!firstSlot) return;
-      // Cargar datos en el formulario de sesión
-      S.sessionTitle = firstSlot.title || '';
-      S.sessionRPE = firstSlot.targetRPE || 6;
-      S.sessionDuration = firstSlot.duration || 80;
-      S.sessionPhase = firstSlot.phase || 'Ligero';
+    // Cargar un slot concreto en el formulario de edición
+    const loadSlotForEdit = function(slotData, slotKey) {
+      S.sessionTitle = slotData.title || '';
+      S.sessionRPE = slotData.targetRPE || 6;
+      S.sessionDuration = slotData.duration || 80;
+      S.sessionPhase = slotData.phase || 'Ligero';
       S.sessionDate = s.date;
-      S.alphaPhase = firstSlot.alphaPhase || null;
-      S.pullText = firstSlot.pullText || '';
-      S.pushText = firstSlot.pushText || '';
-      S.lowerText = firstSlot.lowerText || '';
-      S.warmUp = firstSlot.warmUp || '';
-      S.preSet = firstSlot.preSet || '';
-      S.mainSet = firstSlot.mainSet || '';
-      S.mainSetFondo = firstSlot.mainSetFondo || '';
-      S.coolDown = firstSlot.coolDown || '';
-      S.sessionSlot = hdrSlots.length > 1 ? 'am' : (hdrSlots[0] ? hdrSlots[0].slot : 'unica');
+      S.alphaPhase = slotData.alphaPhase || null;
+      S.pullText = slotData.pullText || '';
+      S.pushText = slotData.pushText || '';
+      S.lowerText = slotData.lowerText || '';
+      S.warmUp = slotData.warmUp || '';
+      S.preSet = slotData.preSet || '';
+      S.mainSet = slotData.mainSet || '';
+      S.mainSetFondo = slotData.mainSetFondo || '';
+      S.coolDown = slotData.coolDown || '';
+      S.sessionSlot = slotKey; // ← turno real, no forzado a 'am'
       S.packDays = 1;
-      S.tab = 0; // ir al tab de sesión
+      S.tab = 0;
       render();
     };
+
+    // Un botón de editar por cada turno existente (mañana / tarde)
+    const editBtns = [];
+    hdrSlots.forEach(function(sl) {
+      const eb = document.createElement('button');
+      eb.className = 'sess-del-btn';
+      eb.innerHTML = hdrSlots.length > 1 ? (sl.slot === 'am' ? '✏️☀️' : '✏️🌙') : '✏️';
+      eb.title = 'Editar ' + (sl.slot === 'am' ? 'mañana' : sl.slot === 'pm' ? 'tarde' : 'sesión');
+      eb.style.marginRight = '4px';
+      eb.onclick = function(ev) {
+        ev.stopPropagation();
+        loadSlotForEdit(sl.sess, sl.slot);
+      };
+      editBtns.push(eb);
+    });
 
     // Botón borrar entreno (solo coach)
     const delBtn = document.createElement('button');
@@ -2841,7 +2847,9 @@ function buildCoachHistorial() {
       });
     };
 
-    header.append(dateBlock, info, editBtn, delBtn, arrow);
+    header.append(dateBlock, info);
+    editBtns.forEach(function(eb){ header.appendChild(eb); });
+    header.append(delBtn, arrow);
     header.onclick = function() { S.histSessionOpen[s.date] = !S.histSessionOpen[s.date]; render(); };
     row.appendChild(header);
 
