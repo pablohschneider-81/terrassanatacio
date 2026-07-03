@@ -1439,7 +1439,14 @@ function contrastText(hex) {
 // ============================================================
 function renderTextWithNotes(text) {
   if (!text) return '';
-  const lines = text.split('\n');
+  // Normalización global: cada "}" y cada "Nx{" pasan a su propia línea,
+  // aunque el usuario los escriba pegados ("rec }2×{" -> "rec" / "}" / "2×{").
+  const norm = text
+    .replace(/(\d+\s*[xX\u00d7]\s*)\{/g, '\n$1{\n')  // aísla apertura Nx{
+    .replace(/\}/g, '\n}\n')                          // aísla cierre }
+    .replace(/\n{2,}/g, '\n')                         // colapsa saltos vacíos
+    .replace(/^\n|\n$/g, '');                         // limpia extremos
+  const lines = norm.split('\n');
   const out = [];
   let insideBlock = false;
   for (let i = 0; i < lines.length; i++) {
@@ -1460,7 +1467,7 @@ function renderTextWithNotes(text) {
     // Detect block closer
     if (raw === '}') {
       insideBlock = false;
-      out.push(`\n<span style="color:var(--accent2);font-weight:700">}</span>`);
+      out.push(`\n<span style="color:var(--accent2);font-weight:700">}</span>\n`);
       continue;
     }
     // Normal line
@@ -2587,12 +2594,7 @@ S.attSelDate = S.attSelDate || todayStr();
 S.attDraft = S.attDraft || {}; // { [slot]: { [athleteId]: status } }
 
 function attRosterForSlot(slot, dateStr) {
-  const dow = dateObj(dateStr).getDay();
-  const isSat = dow === 6;
-  const athletes = DATA.athletes; // [{id,name,morning_days}]
-  if (slot === 'pm' || isSat) return athletes; // tarde y sábado: todos, sin excepción
-  const code = DOW_CODE[dow];
-  return athletes.filter(a => Array.isArray(a.morning_days) && a.morning_days.includes(code));
+  return DATA.athletes; // si hay entreno, se convoca a todos los activos — sin filtro por día/turno
 }
 
 function buildCoachAttendance() {
