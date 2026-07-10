@@ -321,8 +321,9 @@
   .rpe-circle { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.85rem; font-weight: 700; color: #fff; }
   .fatigue-label { font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
   .delta { font-size: 0.8rem; font-weight: 600; }
-  .delta.plus { color: var(--red2); }
-  .delta.minus { color: var(--green); }
+  .delta.good { color: var(--green); }
+  .delta.warn { color: #f39c12; }
+  .delta.bad { color: var(--red2); }
   .comment-btn { background: transparent; border: none; font-size: 1.1rem; cursor: pointer; padding: 4px; }
   .no-data { color: var(--text2); font-size: 0.85rem; text-align: center; padding: 20px; }
 
@@ -645,7 +646,7 @@ function buildSbBanner() {
 let _athleteCache = null;
 async function dbGetAthletes() {
   if (_athleteCache) return _athleteCache;
-  const rows = await sbFetch('athletes?select=id,name,morning_days&active=eq.true&order=name');
+  const rows = await sbFetch('athletes?select=id,name&active=eq.true&order=name');
   _athleteCache = rows || [];
   return _athleteCache;
 }
@@ -802,37 +803,6 @@ async function dbSaveRPE(date, slot, athleteName, rpe, fatigue, note) {
   _rpeRangeLoaded = false;
   return res;
 }
-// ── Asistencia ───────────────────────────────────────────────
-async function dbGetSessionAttendance(sessionId) {
-  const rows = await sbFetch('attendance?session_id=eq.' + sessionId + '&select=athlete_id,status');
-  const map = {};
-  (rows || []).forEach(r => { map[r.athlete_id] = r.status; });
-  return map;
-}
-async function dbSaveAttendanceBulk(sessionId, statusByAthleteId) {
-  const body = Object.entries(statusByAthleteId).map(([athlete_id, status]) => ({
-    athlete_id, session_id: sessionId, status
-  }));
-  if (body.length === 0) return { empty: true };
-  const res = await sbFetch('attendance?on_conflict=athlete_id,session_id', {
-    method: 'POST',
-    prefer: 'resolution=merge-duplicates,return=representation',
-    body: JSON.stringify(body)
-  });
-  delete _attendancePctCache; // invalida cache de % del mes, se recalcula al próximo pedido
-  return res;
-}
-let _attendancePctCache = null;
-async function dbGetAttendancePct() {
-  // vista attendance_monthly: ya trae name, no hace falta resolver id
-  if (_attendancePctCache) return _attendancePctCache;
-  const rows = await sbFetch('attendance_monthly?select=name,attendance_pct');
-  const map = {};
-  (rows || []).forEach(r => { map[r.name] = r.attendance_pct; });
-  _attendancePctCache = map;
-  return map;
-}
-
 // ── Wellness (check-in matinal) ────────────────────────────
 let _wellCache = {}; // date -> {athleteName: {sleep,soreness,fatigue,stress,note}}
 async function dbGetDayWellness(date) {
@@ -867,20 +837,36 @@ async function dbGetAthleteWellnessHist(name) {
   return rows || [];
 }
 
+// Garantiza que DATA.sessions esté poblado antes de leer duración.
+// Evita la carrera de red: sin esto, dbGetAthleteHist/dbGetAllAthleteHist podían
+// leer DATA.sessions vacío si su propio fetch de rpe_entries resolvía antes que
+// el de sessions (ambos lanzados en paralelo en loadData()), cayendo al fallback
+// de 80 min de forma silenciosa aunque la sesión real tuviera otra duración.
+async function ensureSessionsLoaded() {
+  if (Object.keys(DATA.sessions).length > 0) return;
+  const s = await dbGetAllSessions(6);
+  DATA.allSessions = s;
+  DATA.sessions = {};
+  s.forEach(x => { DATA.sessions[x.date] = x.data; });
+}
+
 async function dbGetAthleteHist(name) {
   const athleteId = await dbAthleteId(name);
   if (!athleteId) return [];
+  await ensureSessionsLoaded();
   const from = new Date(); from.setDate(from.getDate() - 27);
   const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
   const rows = await sbFetch('rpe_entries?athlete_id=eq.' + athleteId + '&select=date,slot,rpe,fatigue&date=gte.' + fromS + '&order=date.asc');
   if (!rows) return [];
   // Adjuntar duración de la sesión correspondiente (para sRPE = RPE × min).
-  // Las sesiones ya están en DATA.sessions (cargadas por ventana); si falta, default 80.
+  // DATA.sessions ya garantizado por ensureSessionsLoaded(); si aun así falta
+  // (sesión borrada / dato huérfano real, no carrera), default 80 y se marca estimado.
   rows.forEach(function(h) {
-    let dur = 80;
+    let dur = 80, estimated = true;
     const day = DATA.sessions && DATA.sessions[h.date];
-    if (day && day[h.slot] && day[h.slot].duration) dur = day[h.slot].duration;
+    if (day && day[h.slot] && day[h.slot].duration) { dur = day[h.slot].duration; estimated = false; }
     h.duration = dur;
+    h.durationEstimated = estimated;
   });
   return rows;
 }
@@ -889,6 +875,7 @@ async function dbGetAthleteHist(name) {
 // Escuadra del coach). Devuelve un mapa name -> [{date,slot,rpe,fatigue,duration}],
 // mismo shape que dbGetAthleteHist para que calcACWR() no distinga origen.
 async function dbGetAllAthleteHist() {
+  await ensureSessionsLoaded();
   const from = new Date(); from.setDate(from.getDate() - 27);
   const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
   const rows = await sbFetch('rpe_entries?select=date,slot,rpe,fatigue,athletes(name)&date=gte.' + fromS + '&order=date.asc');
@@ -897,11 +884,11 @@ async function dbGetAllAthleteHist() {
   rows.forEach(function(r) {
     const name = r.athletes && r.athletes.name;
     if (!name) return;
-    let dur = 80;
+    let dur = 80, estimated = true;
     const day = DATA.sessions && DATA.sessions[r.date];
-    if (day && day[r.slot] && day[r.slot].duration) dur = day[r.slot].duration;
+    if (day && day[r.slot] && day[r.slot].duration) { dur = day[r.slot].duration; estimated = false; }
     if (!map[name]) map[name] = [];
-    map[name].push({ date: r.date, slot: r.slot, rpe: r.rpe, fatigue: r.fatigue, duration: dur });
+    map[name].push({ date: r.date, slot: r.slot, rpe: r.rpe, fatigue: r.fatigue, duration: dur, durationEstimated: estimated });
   });
   return map;
 }
@@ -1419,6 +1406,15 @@ function rpeSubmissions(entry) {
 // ============================================================
 // RPE COLOR
 // ============================================================
+// Clasifica el delta RPE reportado − objetivo con margen de tolerancia.
+// ±1 es variación normal (no es señal); ±2 vale la pena mirar; ±3+ es discrepancia
+// grande en cualquier dirección (mucho más duro o mucho más fácil de lo planeado).
+function deltaClass(delta) {
+  const abs = Math.abs(delta);
+  if (abs <= 1) return 'good';
+  if (abs === 2) return 'warn';
+  return 'bad';
+}
 function rpeColor(v) {
   if (!v) return '#555';
   if (v <= 3) return '#1e8449';
@@ -1439,14 +1435,7 @@ function contrastText(hex) {
 // ============================================================
 function renderTextWithNotes(text) {
   if (!text) return '';
-  // Normalización global: cada "}" y cada "Nx{" pasan a su propia línea,
-  // aunque el usuario los escriba pegados ("rec }2×{" -> "rec" / "}" / "2×{").
-  const norm = text
-    .replace(/(\d+\s*[xX\u00d7]\s*)\{/g, '\n$1{\n')  // aísla apertura Nx{
-    .replace(/\}/g, '\n}\n')                          // aísla cierre }
-    .replace(/\n{2,}/g, '\n')                         // colapsa saltos vacíos
-    .replace(/^\n|\n$/g, '');                         // limpia extremos
-  const lines = norm.split('\n');
+  const lines = text.split('\n');
   const out = [];
   let insideBlock = false;
   for (let i = 0; i < lines.length; i++) {
@@ -1458,7 +1447,7 @@ function renderTextWithNotes(text) {
     if (opener) {
       insideBlock = true;
       const label = opener[1] + '\u00d7';
-      out.push(`\n<span style="color:var(--accent2);font-weight:700;letter-spacing:1px">${label}{</span>`);
+      out.push(`<span style="color:var(--accent2);font-weight:700;letter-spacing:1px">${label}{</span>`);
       if (opener[2].trim()) {
         out.push('\n  ' + renderInlineNotes(opener[2].trim()));
       }
@@ -1467,7 +1456,7 @@ function renderTextWithNotes(text) {
     // Detect block closer
     if (raw === '}') {
       insideBlock = false;
-      out.push(`\n<span style="color:var(--accent2);font-weight:700">}</span>\n`);
+      out.push(`\n<span style="color:var(--accent2);font-weight:700">}</span>`);
       continue;
     }
     // Normal line
@@ -1523,9 +1512,71 @@ function calcACWR(athleteName) {
     return ratio;
   } catch(e) { return null; }
 }
+
+// ============================================================
+// MONOTONÍA Y STRAIN (Foster, 1998)
+// Monotonía = carga media diaria (7d) ÷ desviación estándar de esa carga diaria.
+// Captura lo que el ACWR no ve: una semana de RPE parejo día a día puede salir
+// "Óptima" en ACWR y aun así ser de riesgo si no hay variación (Foster la
+// vinculó a mayor incidencia de enfermedad/lesión incluso con carga moderada).
+// Strain = carga semanal total × monotonía.
+// Desviación estándar muestral (n-1), consistente con las guías prácticas
+// (hojas de cálculo STDEV) más citadas para este método.
+function calcMonotonyStrain(athleteName) {
+  try {
+  const hist = DATA.athleteHist[athleteName] || [];
+  const today = new Date();
+  const loadByDay = {};
+  hist.forEach(function(h) {
+    const d = dateObj(h.date);
+    const daysAgo = Math.floor((today - d) / 86400000);
+    if (daysAgo < 0 || daysAgo >= 7) return;
+    const srpe = h.rpe * (h.duration || 80);
+    loadByDay[h.date] = (loadByDay[h.date] || 0) + srpe;
+  });
+  // Construir los 7 días calendario completos: los días sin sesión cuentan
+  // como carga 0 (el descanso real es lo que baja la monotonía).
+  const dailyLoads = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const key = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    dailyLoads.push(loadByDay[key] || 0);
+  }
+  const weeklyLoad = dailyLoads.reduce(function(a,b){ return a+b; }, 0);
+  if (weeklyLoad === 0) return null;
+  const n = dailyLoads.length;
+  const mean = weeklyLoad / n;
+  const variance = dailyLoads.reduce(function(a,b){ return a + Math.pow(b-mean, 2); }, 0) / (n - 1);
+  const sd = Math.sqrt(variance);
+  if (sd === 0) return { monotony: null, strain: null, weeklyLoad: Math.round(weeklyLoad), flatWeek: true };
+  const monotony = Math.round((mean / sd) * 100) / 100;
+  const strain = Math.round(weeklyLoad * monotony);
+  return { monotony: monotony, strain: strain, weeklyLoad: Math.round(weeklyLoad), flatWeek: false };
+  } catch(e) { return null; }
+}
+function monotonyLabel(m) {
+  // Umbrales orientativos de la literatura (Foster/adaptaciones posteriores),
+  // no un corte validado específicamente en natación juvenil — usar como guía,
+  // no como diagnóstico automático.
+  if (m === null) return { label: 'Sin variación', color: '#e74c3c' };
+  if (m < 1.5) return { label: 'Bien variada', color: '#27ae60' };
+  if (m <= 2.0) return { label: 'Moderada', color: '#f39c12' };
+  return { label: 'Alta monotonía', color: '#e74c3c' };
+}
+// Detecta si, dentro de la ventana de 28 días que usa el ACWR, hay entradas
+// cuya duración cayó en el fallback de 80 min por no encontrar la sesión real
+// (sesión borrada / dato huérfano) — no por la carrera de red ya corregida.
+function acwrHasEstimated(athleteName) {
+  const hist = DATA.athleteHist[athleteName] || [];
+  const today = new Date();
+  return hist.some(function(h) {
+    const daysAgo = Math.floor((today - dateObj(h.date)) / 86400000);
+    return daysAgo >= 0 && daysAgo < 28 && h.durationEstimated;
+  });
+}
 function acwrLabel(ratio) {
   if (ratio === null) return null;
-  if (typeof ratio === 'object' && ratio.calibrating) return { label: 'Calibrando', color: '#5a7085', icon: '○', calibrating: true };
+  if (typeof ratio === 'object' && ratio.calibrating) return { label: 'Calibrando', color: '#a8bfd4', icon: '○', calibrating: true };
   if (ratio < 0.8)  return { label: 'Subcarga', color: '#3498db', icon: '↓' };
   if (ratio <= 1.3) return { label: 'Óptimo',   color: '#27ae60', icon: '✓' };
   if (ratio <= 1.5) return { label: 'Atención', color: '#f39c12', icon: '⚠' };
@@ -1550,9 +1601,9 @@ function render() {
   content.className = 'content';
 
   if (S.role === 'coach') {
-    const tabs = ['Sesión','RPE','Escuadra','Calend.','Inscr.','Equipo','Historial','Asist.'];
+    const tabs = ['Sesión','RPE','Escuadra','Calend.','Inscr.','Equipo','Historial'];
     content.appendChild(buildTabs(tabs, S.tab, i => { S.tab = i; if(i===3){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
-    const views = [buildCoachSession, buildCoachRPE, buildCoachSquad, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial, buildCoachAttendance];
+    const views = [buildCoachSession, buildCoachRPE, buildCoachSquad, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial];
     content.appendChild(views[S.tab]());
   } else {
     const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión'];
@@ -1771,7 +1822,6 @@ const NAV_ICONS = {
   equipo: '<circle cx="9" cy="8" r="3"/><path d="M2 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14c2.8.3 5 2.3 5 5"/>',
   escuadra: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
   historial: '<path d="M3 7l2-3h14l2 3"/><path d="M3 7v12a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V7"/><path d="M3 7h18"/><path d="M10 11h4"/>',
-  asistencia: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10.5l2.5 2.5L16 8"/>',
   inicio: '<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/>',
   mirpe: '<path d="M6.5 16.5 3 13l2-2 3.5 3.5"/><path d="M17.5 7.5 21 11l-2 2-3.5-3.5"/><path d="M9 15l6-6"/><path d="M5 9l2-2M17 19l2-2"/>',
   natacion: '<circle cx="7" cy="6" r="2"/><path d="M5 10.5 9 8l3 2.5 3-2 4 2"/><path d="M2 16c1.4 1.4 2.8 1.4 4.2 0s2.8-1.4 4.2 0 2.8 1.4 4.2 0 2.8-1.4 4.2 0"/><path d="M2 19.5c1.4 1.4 2.8 1.4 4.2 0s2.8-1.4 4.2 0 2.8 1.4 4.2 0 2.8-1.4 4.2 0"/>'
@@ -1787,8 +1837,7 @@ function buildBottomNav() {
       {icon:'calend',label:'Calend.'},
       {icon:'inscr',label:'Inscr.'},
       {icon:'equipo',label:'Equipo'},
-      {icon:'historial',label:'Historial'},
-      {icon:'asistencia',label:'Asist.'}
+      {icon:'historial',label:'Historial'}
     ];
     items.forEach((item, i) => {
       const btn = document.createElement('button');
@@ -2123,12 +2172,12 @@ function buildCoachRPE() {
       });
       const delta = deltaCount > 0 ? Math.round(deltaSum / deltaCount) : 0;
       const deltaStr = delta > 0 ? '+'+delta : delta < 0 ? ''+delta : '=';
-      const deltaClass = delta > 0 ? 'plus' : delta < 0 ? 'minus' : '';
+      const dClass = deltaCount > 0 ? deltaClass(delta) : '';
       tr.innerHTML = `
         <td>${nameShort}</td>
         <td>${circles}</td>
         <td><span class="fatigue-label" style="background:${fat.color}22;color:${fat.color}">${fat.label}</span></td>
-        <td><span class="delta ${deltaClass}">${deltaStr}</span></td>
+        <td><span class="delta ${dClass}">${deltaStr}</span></td>
         <td><button class="comment-btn" data-ath="${name}">${getComments()[today+'_'+name] ? '💬' : '✏️'}</button></td>
       `;
     } else {
@@ -2218,10 +2267,10 @@ function buildCoachRPE() {
             });
             const delta = dc2 > 0 ? Math.round(ds2/dc2) : 0;
             const deltaStr = delta > 0 ? '+'+delta : delta < 0 ? ''+delta : '=';
-            const deltaClass = delta > 0 ? 'plus' : delta < 0 ? 'minus' : '';
+            const dClass2 = dc2 > 0 ? deltaClass(delta) : '';
             const hasComment = !!getComments()[s.date+'_'+name];
             const noteHtml = lastE.note ? '<div style=\"font-size:0.7rem;color:var(--text2);font-style:italic\">\"' + lastE.note + '\"</div>' : '';
-            tr.innerHTML = '<td>' + ns + noteHtml + '</td><td>' + circles + '</td><td><span class=\"fatigue-label\" style=\"background:' + fat.color + '22;color:' + fat.color + ';font-size:0.7rem\">' + fat.label + '</span></td><td><span class=\"delta ' + deltaClass + '\">' + deltaStr + '</span></td><td><button class=\"comment-btn\" data-ath=\"' + name + '\" data-date=\"' + s.date + '\">' + (hasComment ? '\ud83d\udcac' : '\u270f\ufe0f') + '</button></td>';
+            tr.innerHTML = '<td>' + ns + noteHtml + '</td><td>' + circles + '</td><td><span class=\"fatigue-label\" style=\"background:' + fat.color + '22;color:' + fat.color + ';font-size:0.7rem\">' + fat.label + '</span></td><td><span class=\"delta ' + dClass2 + '\">' + deltaStr + '</span></td><td><button class=\"comment-btn\" data-ath=\"' + name + '\" data-date=\"' + s.date + '\">' + (hasComment ? '\ud83d\udcac' : '\u270f\ufe0f') + '</button></td>';
           } else {
             tr.innerHTML = '<td>' + ns + '</td><td colspan=\"3\" style=\"color:var(--text2);font-size:0.78rem\">Sin respuesta</td><td></td>';
           }
@@ -2253,15 +2302,13 @@ function buildCoachSquad() {
   const d = document.createElement('div');
   const athletes = getAthletes();
 
-  // ── Cargar historial de todos + asistencia (una sola vez por sesión de la app) ──
-  if (!DATA.allHistLoaded || !DATA.attendancePct) {
-    Promise.all([
-      DATA.allHistLoaded ? Promise.resolve() : dbGetAllAthleteHist().then(function(map) {
-        Object.keys(map).forEach(function(name) { DATA.athleteHist[name] = map[name]; });
-        DATA.allHistLoaded = true;
-      }),
-      DATA.attendancePct ? Promise.resolve() : dbGetAttendancePct().then(function(map) { DATA.attendancePct = map; })
-    ]).then(render);
+  // ── Cargar historial de todos (una sola vez por sesión de la app) ──
+  if (!DATA.allHistLoaded) {
+    dbGetAllAthleteHist().then(function(map) {
+      Object.keys(map).forEach(function(name) { DATA.athleteHist[name] = map[name]; });
+      DATA.allHistLoaded = true;
+      render();
+    });
     const loading = document.createElement('div'); loading.className = 'card';
     loading.innerHTML = '<div class="card-sub">Cargando carga de los últimos 28 días…</div>';
     d.appendChild(loading);
@@ -2305,31 +2352,30 @@ function buildCoachSquad() {
   acwrData.forEach(function(x) {
     const isCal = x.info.calibrating;
     const num = isCal ? x.raw.value : x.raw;
-    const val = isCal ? (num + '*') : (x.info.icon + ' ' + num);
-
-    const hist = DATA.athleteHist[x.name] || [];
-    const lastRpe = hist.length > 0 ? hist[hist.length - 1] : null; // hist viene asc por fecha
-    const rpeStr = lastRpe ? 'RPE ' + lastRpe.rpe + ' · ' + lastRpe.date.slice(5).split('-').reverse().join('/') : 'Sin RPE';
-
-    const attPct = DATA.attendancePct[x.name];
-    const attCol = attPct == null ? '#7a9ab8' : attPct >= 85 ? '#1e8449' : attPct >= 70 ? '#c0621a' : '#c0392b';
-    const attStr = attPct == null ? '—' : attPct + '%';
-
+    const estMark = acwrHasEstimated(x.name) ? ' ≈' : '';
+    const val = (isCal ? (num + '*') : (x.info.icon + ' ' + num)) + estMark;
     const card = document.createElement('div');
     card.className = 'acwr-card';
     card.style.borderColor = x.info.color + '55';
+    card.title = estMark ? 'Incluye sesión sin duración real registrada (estimada en 80 min)' : '';
+    const ms = calcMonotonyStrain(x.name);
+    let monoHtml = '';
+    if (ms) {
+      const mLbl = monotonyLabel(ms.monotony);
+      const mVal = ms.flatWeek ? '∞' : ms.monotony;
+      monoHtml = '<div class="acwr-mono" style="font-size:0.62rem;margin-top:3px;color:' + mLbl.color + '" title="Monotonía semanal · Strain ' + ms.strain + '">M ' + mVal + '</div>';
+    }
     card.innerHTML = '<div class="acwr-name">' + x.name.split(' ')[0] + '</div>'
       + '<div class="acwr-val" style="color:' + x.info.color + '">' + val + '</div>'
       + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + (isCal ? 'Provisional' : x.info.label) + '</div>'
-      + '<div style="font-size:0.6rem;color:#7a9ab8;margin-top:4px;border-top:1px solid rgba(100,140,180,0.15);padding-top:4px">' + rpeStr + '</div>'
-      + '<div style="font-size:0.68rem;font-weight:700;color:' + attCol + '">Asist. ' + attStr + '</div>';
+      + monoHtml;
     grid.appendChild(card);
   });
   d.appendChild(grid);
 
   const note = document.createElement('div');
   note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin:-4px 0 4px;padding:0 2px';
-  note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5. El * marca valor provisional (faltan ~3 semanas de datos para que sea fiable).';
+  note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5. El * marca valor provisional (faltan ~3 semanas de datos para que sea fiable). "M" = monotonía semanal (Foster): <1.5 bien variada, 1.5–2.0 moderada, >2.0 alta — semana repetitiva incluso con ACWR óptimo.';
   d.appendChild(note);
 
   return d;
@@ -2588,142 +2634,6 @@ function buildCoachTeam() {
 // ============================================================
 // COACH: HISTORIAL
 // ============================================================
-// ── Asistencia (tab coach) ──────────────────────────────────
-const DOW_CODE = ['sun','mon','tue','wed','thu','fri','sat'];
-S.attSelDate = S.attSelDate || todayStr();
-S.attDraft = S.attDraft || {}; // { [slot]: { [athleteId]: status } }
-
-function attRosterForSlot(slot, dateStr) {
-  return DATA.athletes; // si hay entreno, se convoca a todos los activos — sin filtro por día/turno
-}
-
-function buildCoachAttendance() {
-  const d = document.createElement('div');
-  const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'ASISTENCIA';
-  d.appendChild(st);
-
-  const dateRow = document.createElement('div');
-  dateRow.style.cssText = 'margin-bottom:14px';
-  const dateInput = document.createElement('input');
-  dateInput.type = 'date';
-  dateInput.value = S.attSelDate;
-  dateInput.style.cssText = 'padding:8px 12px;border-radius:10px;border:1px solid rgba(100,140,180,0.25);font-size:0.85rem';
-  dateInput.onchange = function() { S.attSelDate = dateInput.value; S.attDraft = {}; render(); };
-  dateRow.appendChild(dateInput);
-  d.appendChild(dateRow);
-
-  if (!DATA.athletes || DATA.athletes.length === 0) {
-    const empty = document.createElement('div'); empty.className = 'card';
-    empty.innerHTML = '<div class="card-sub">Cargando nadadores…</div>';
-    d.appendChild(empty);
-    return d;
-  }
-
-  if (S._attSessionDate !== S.attSelDate) {
-    S._attSessionDate = S.attSelDate;
-    S._attSaved = {}; // { [slot]: true } si ya hay asistencia registrada en la base
-    dbGetSession(S.attSelDate).then(function(sess) {
-      S._attSession = sess;
-      ['am','pm'].forEach(function(slot) {
-        if (sess && sess[slot] && sess[slot]._id) {
-          dbGetSessionAttendance(sess[slot]._id).then(function(map) {
-            S.attDraft[slot] = map;
-            S._attSaved[slot] = Object.keys(map).length > 0; // ya se cerró antes
-            render();
-          });
-        }
-      });
-      render();
-    });
-    const loading = document.createElement('div'); loading.className = 'card';
-    loading.innerHTML = '<div class="card-sub">Cargando sesión…</div>';
-    d.appendChild(loading);
-    return d;
-  }
-
-  const sess = S._attSession;
-  if (!sess || (!sess.am && !sess.pm)) {
-    const empty = document.createElement('div'); empty.className = 'card';
-    empty.innerHTML = '<div class="card-sub">No hay entreno cargado ese día.</div>';
-    d.appendChild(empty);
-    return d;
-  }
-
-  ['am', 'pm'].forEach(function(slot) {
-    const s = sess[slot];
-    if (!s || !s._id) return;
-    const sessionId = s._id;
-    const roster = attRosterForSlot(slot, S.attSelDate);
-    S.attDraft[slot] = S.attDraft[slot] || {};
-
-    const panel = document.createElement('div'); panel.className = 'card'; panel.style.marginBottom = '14px';
-    const hdr = document.createElement('div');
-    hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px';
-    hdr.innerHTML = '<div style="font-weight:700;font-size:0.9rem;color:#1a2a3a">' + (slot === 'am' ? '☀️ Mañana' : '🌙 Tarde') + ' — ' + (s.title || 'Sin título') + '</div>' +
-      '<div style="font-size:0.72rem;color:#7a9ab8">' + roster.length + ' convocados</div>';
-    panel.appendChild(hdr);
-
-    if (roster.length === 0) {
-      const emptyMsg = document.createElement('div');
-      emptyMsg.style.cssText = 'font-size:0.78rem;color:#7a9ab8;padding:8px 2px';
-      emptyMsg.textContent = 'Nadie convocado en este turno según su asignación de mañanas.';
-      panel.appendChild(emptyMsg);
-      d.appendChild(panel);
-      return; // sin roster no hay nada para marcar ni cerrar
-    }
-
-    roster.forEach(function(a) {
-      const status = S.attDraft[slot][a.id] || 'present';
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:8px 2px;border-bottom:1px solid rgba(100,140,180,0.12)';
-      const name = document.createElement('span');
-      name.style.cssText = 'font-size:0.85rem;font-weight:600;color:#1a2a3a';
-      name.textContent = a.name;
-      row.appendChild(name);
-
-      const toggle = document.createElement('div');
-      toggle.style.cssText = 'display:flex;gap:4px';
-      [['present','Presente','#1e8449','rgba(30,132,73,0.12)'],
-       ['absent','Ausente','#c0392b','rgba(192,57,43,0.12)'],
-       ['justified','Justif.','#c0621a','rgba(192,98,26,0.12)']].forEach(function(opt) {
-        const btn = document.createElement('button');
-        const active = status === opt[0];
-        btn.textContent = opt[1];
-        btn.style.cssText = 'border:none;font-size:0.68rem;font-weight:700;padding:5px 9px;border-radius:8px;cursor:pointer;' +
-          (active ? 'background:' + opt[3] + ';color:' + opt[2] : 'background:rgba(100,140,180,0.08);color:#7a9ab8');
-        btn.onclick = function() {
-          S.attDraft[slot][a.id] = opt[0];
-          render();
-        };
-        toggle.appendChild(btn);
-      });
-      row.appendChild(toggle);
-      panel.appendChild(row);
-    });
-
-    const saved = S._attSaved && S._attSaved[slot];
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = saved ? '✓ Lista cerrada — guardar cambios' : 'Cerrar sesión y guardar';
-    const grad = saved ? 'linear-gradient(135deg,#1e8449,#27ae60)' : 'linear-gradient(135deg,#2980b9,#3498db)';
-    closeBtn.style.cssText = 'margin-top:10px;width:100%;padding:10px;border-radius:10px;border:none;background:' + grad + ';color:#fff;font-weight:700;font-size:0.85rem;cursor:pointer';
-    closeBtn.onclick = function() {
-      closeBtn.disabled = true; closeBtn.textContent = 'Guardando…';
-      const finalMap = {};
-      roster.forEach(function(a) { finalMap[a.id] = S.attDraft[slot][a.id] || 'present'; });
-      dbSaveAttendanceBulk(sessionId, finalMap).then(function(res) {
-        if (!res) { alert('Error al guardar. Reintentá.'); closeBtn.disabled = false; closeBtn.textContent = 'Cerrar sesión y guardar'; return; }
-        S.attDraft[slot] = finalMap;
-        S._attSaved = S._attSaved || {}; S._attSaved[slot] = true;
-        render();
-      });
-    };
-    panel.appendChild(closeBtn);
-    d.appendChild(panel);
-  });
-
-  return d;
-}
-
 function buildCoachHistorial() {
   const d = document.createElement('div');
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'HISTORIAL DE SESIONES';
@@ -2789,42 +2699,36 @@ function buildCoachHistorial() {
     info.innerHTML = '<div class="hist-title">' + titleStr + '</div><div class="hist-meta"><span class="tag">' + first.phase + '</span>' + (first.alphaPhase ? '<span class="tag">' + first.alphaPhase + '</span>' : '') + '<span>RPE obj: ' + targetStr + '</span></div>';
     const arrow = document.createElement('span'); arrow.style.color = 'var(--text2)'; arrow.textContent = S.histSessionOpen[s.date] ? '▲' : '▼';
 
-    // Cargar un slot concreto en el formulario de edición
-    const loadSlotForEdit = function(slotData, slotKey) {
-      S.sessionTitle = slotData.title || '';
-      S.sessionRPE = slotData.targetRPE || 6;
-      S.sessionDuration = slotData.duration || 80;
-      S.sessionPhase = slotData.phase || 'Ligero';
+    // Botón editar entreno (solo coach)
+    const editBtn = document.createElement('button');
+    editBtn.className = 'sess-del-btn';
+    editBtn.innerHTML = '✏️';
+    editBtn.title = 'Editar sesión';
+    editBtn.style.marginRight = '4px';
+    editBtn.onclick = function(ev) {
+      ev.stopPropagation();
+      const firstSlot = hdrSlots[0] ? hdrSlots[0].sess : null;
+      if (!firstSlot) return;
+      // Cargar datos en el formulario de sesión
+      S.sessionTitle = firstSlot.title || '';
+      S.sessionRPE = firstSlot.targetRPE || 6;
+      S.sessionDuration = firstSlot.duration || 80;
+      S.sessionPhase = firstSlot.phase || 'Ligero';
       S.sessionDate = s.date;
-      S.alphaPhase = slotData.alphaPhase || null;
-      S.pullText = slotData.pullText || '';
-      S.pushText = slotData.pushText || '';
-      S.lowerText = slotData.lowerText || '';
-      S.warmUp = slotData.warmUp || '';
-      S.preSet = slotData.preSet || '';
-      S.mainSet = slotData.mainSet || '';
-      S.mainSetFondo = slotData.mainSetFondo || '';
-      S.coolDown = slotData.coolDown || '';
-      S.sessionSlot = slotKey; // ← turno real, no forzado a 'am'
+      S.alphaPhase = firstSlot.alphaPhase || null;
+      S.pullText = firstSlot.pullText || '';
+      S.pushText = firstSlot.pushText || '';
+      S.lowerText = firstSlot.lowerText || '';
+      S.warmUp = firstSlot.warmUp || '';
+      S.preSet = firstSlot.preSet || '';
+      S.mainSet = firstSlot.mainSet || '';
+      S.mainSetFondo = firstSlot.mainSetFondo || '';
+      S.coolDown = firstSlot.coolDown || '';
+      S.sessionSlot = hdrSlots.length > 1 ? 'am' : (hdrSlots[0] ? hdrSlots[0].slot : 'unica');
       S.packDays = 1;
-      S.tab = 0;
+      S.tab = 0; // ir al tab de sesión
       render();
     };
-
-    // Un botón de editar por cada turno existente (mañana / tarde)
-    const editBtns = [];
-    hdrSlots.forEach(function(sl) {
-      const eb = document.createElement('button');
-      eb.className = 'sess-del-btn';
-      eb.innerHTML = hdrSlots.length > 1 ? (sl.slot === 'am' ? '✏️☀️' : '✏️🌙') : '✏️';
-      eb.title = 'Editar ' + (sl.slot === 'am' ? 'mañana' : sl.slot === 'pm' ? 'tarde' : 'sesión');
-      eb.style.marginRight = '4px';
-      eb.onclick = function(ev) {
-        ev.stopPropagation();
-        loadSlotForEdit(sl.sess, sl.slot);
-      };
-      editBtns.push(eb);
-    });
 
     // Botón borrar entreno (solo coach)
     const delBtn = document.createElement('button');
@@ -2847,9 +2751,7 @@ function buildCoachHistorial() {
       });
     };
 
-    header.append(dateBlock, info);
-    editBtns.forEach(function(eb){ header.appendChild(eb); });
-    header.append(delBtn, arrow);
+    header.append(dateBlock, info, editBtn, delBtn, arrow);
     header.onclick = function() { S.histSessionOpen[s.date] = !S.histSessionOpen[s.date]; render(); };
     row.appendChild(header);
 
@@ -3166,19 +3068,6 @@ function buildAthleteInicio() {
   msg.innerHTML = coachMsg(acwr);
   ringSection.appendChild(msg);
   d.appendChild(ringSection);
-
-  // ── ASISTENCIA (mes actual) ──
-  if (!DATA.attendancePct) {
-    dbGetAttendancePct().then(function(map) { DATA.attendancePct = map; render(); });
-  } else {
-    const pct = DATA.attendancePct[S.athleteName];
-    const attCol = pct == null ? '#7a9ab8' : pct >= 85 ? '#1e8449' : pct >= 70 ? '#c0621a' : '#c0392b';
-    const attCard = document.createElement('div');
-    attCard.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-radius:14px;padding:14px 16px;margin-bottom:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
-    attCard.innerHTML = '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#4a6a8a;text-transform:uppercase;margin-bottom:4px">ASISTENCIA · MES ACTUAL</div>' +
-      '<div style="font-size:1.6rem;font-weight:900;color:' + attCol + '">' + (pct == null ? '—' : pct + '%') + '</div>';
-    d.appendChild(attCard);
-  }
 
   // ── 4 CARDS GLASS ──
   const grid = document.createElement('div');
@@ -3675,8 +3564,24 @@ function buildAthleteStats() {
     d.appendChild(buildACWRChart(hist));
     const note = document.createElement('div');
     note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin-top:4px;padding:0 2px';
-    note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5';
+    note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5' + (acwrHasEstimated(S.athleteName) ? ' · * incluye sesión sin duración real registrada (estimada en 80 min)' : '');
     d.appendChild(note);
+
+    // ── Monotonía / Strain (Foster) ──
+    const ms = calcMonotonyStrain(S.athleteName);
+    if (ms) {
+      const mLbl = monotonyLabel(ms.monotony);
+      const mVal = ms.flatWeek ? '∞ (semana sin variación)' : ms.monotony;
+      const monoCard = document.createElement('div'); monoCard.className = 'card'; monoCard.style.cssText = 'padding:12px 14px;margin-top:10px';
+      monoCard.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:1.5px;color:' + mLbl.color + ';text-transform:uppercase;margin-bottom:4px">MONOTONÍA SEMANAL</div>'
+        + '<div style="display:flex;align-items:baseline;gap:10px">'
+        + '<div style="font-size:1.3rem;font-weight:800;color:' + mLbl.color + '">' + mVal + '</div>'
+        + '<div style="font-size:0.82rem;color:' + mLbl.color + '">' + mLbl.label + '</div>'
+        + '</div>'
+        + '<div style="font-size:0.72rem;color:var(--text2);margin-top:4px">Strain: ' + (ms.strain !== null ? ms.strain : '—') + ' · Carga semanal: ' + ms.weeklyLoad + '</div>'
+        + '<div style="font-size:0.68rem;color:var(--text2);margin-top:4px">Mide qué tan parecidos son tus días de carga esta semana. Una semana sin variación puede ser de riesgo aunque el ACWR salga óptimo.</div>';
+      d.appendChild(monoCard);
+    }
   }
 
   // ── Marcas personales ──
