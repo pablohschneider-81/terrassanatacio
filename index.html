@@ -661,8 +661,17 @@ async function dbAddAthlete(name) {
   return res;
 }
 async function dbDeleteAthlete(name) {
-  await sbFetch('athletes?name=eq.' + encodeURIComponent(name), { method:'DELETE', prefer: 'return=minimal' });
+  // Soft-delete: pone active=false en vez de borrar la fila.
+  // Un DELETE físico fallaba en silencio por la FK de 'attendance' (NO ACTION,
+  // a diferencia de rpe_entries/comments/inscriptions/wellness_entries que sí
+  // tienen CASCADE) — y de paso hubiera borrado el historial de asistencia,
+  // RPE y wellness del nadador. dbGetAthletes() ya filtra active=eq.true.
+  // Nota: sin 'return=minimal' (default 'return=representation') para poder
+  // distinguir éxito (devuelve la fila) de fallo (sbFetch devuelve null en
+  // ambos casos si se pide return=minimal).
+  const res = await sbFetch('athletes?name=eq.' + encodeURIComponent(name), { method:'PATCH', body: JSON.stringify({ active: false }) });
   _athleteCache = null;
+  return Array.isArray(res) && res.length > 0;
 }
 
 // ── Sessions ───────────────────────────────────────────────
@@ -2623,7 +2632,10 @@ function buildCoachTeam() {
     const n = document.createElement('span'); n.className = 'athlete-name'; n.textContent = name;
     const del = document.createElement('button'); del.className = 'btn-del'; del.textContent = '✕';
     del.onclick = function() {
-      dbDeleteAthlete(name).then(function() { renderAsync(); });
+      dbDeleteAthlete(name).then(function(ok) {
+        if (!ok) { showConfirm('No se pudo eliminar', 'Hubo un error de conexión con la base de datos. Revisá tu internet e intentá de nuevo.', function(){}); return; }
+        renderAsync();
+      });
     };
     item.append(n, del);
     d.appendChild(item);
