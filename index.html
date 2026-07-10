@@ -890,6 +890,34 @@ async function ensureSessionsLoaded() {
   s.forEach(x => { DATA.sessions[x.date] = x.data; });
 }
 
+// ============================================================
+// ENCUESTA POST-COMPETICIÓN
+// Se activa 5 días después de terminar una competición de nivel
+// Autonómico, Nacional o Internacional (no en meets de club) — el margen
+// de 5 días es para que el nadador conteste después de que baje la carga
+// emocional inmediata, no en caliente.
+async function dbGetPendingSurvey(name) {
+  const athleteId = await dbAthleteId(name);
+  if (!athleteId) return null;
+  const today = new Date();
+  const limit = new Date(today); limit.setDate(limit.getDate() - 5);
+  const limitS = limit.getFullYear()+'-'+String(limit.getMonth()+1).padStart(2,'0')+'-'+String(limit.getDate()).padStart(2,'0');
+  const comps = await sbFetch('competitions?select=id,name,type,end_date&type=in.(Nacional,Autonómico,Internacional)&end_date=lte.' + limitS + '&order=end_date.desc');
+  if (!comps || comps.length === 0) return null;
+  for (const c of comps) {
+    const existing = await sbFetch('results?athlete_id=eq.' + athleteId + '&competition_id=eq.' + c.id + '&select=id&limit=1');
+    if (!existing || existing.length === 0) return c; // primera competición sin encuesta completada
+  }
+  return null;
+}
+
+async function dbSaveResult(name, competitionId, data) {
+  const athleteId = await dbAthleteId(name);
+  if (!athleteId) return false;
+  const res = await sbFetch('results', { method:'POST', body: JSON.stringify(Object.assign({ athlete_id: athleteId, competition_id: competitionId }, data)) });
+  return Array.isArray(res) && res.length > 0;
+}
+
 async function dbGetAthleteHist(name) {
   const athleteId = await dbAthleteId(name);
   if (!athleteId) return [];
@@ -1245,7 +1273,8 @@ const DATA = {
   athleteHist: {}, // name -> [{date,slot,rpe,fatigue}]
   allHistLoaded: false, // true cuando ya se cargó el historial de todos (panel Escuadra)
   wellness: {},    // date -> {athleteName: {sleep,soreness,fatigue,stress,note}}
-  athleteWellHist: {} // name -> [{date,sleep,soreness,fatigue,stress}]
+  athleteWellHist: {}, // name -> [{date,sleep,soreness,fatigue,stress}]
+  pendingSurvey: {} // name -> competición pendiente de encuesta post-carrera (o null)
 };
 
 // Sync accessors (read from cache)
@@ -3749,6 +3778,60 @@ function buildRitmoCalc(mbInput) {
 // ============================================================
 // ATHLETE: STATS (ahora: MI TEMPORADA — gráficos + marcas)
 // ============================================================
+function buildResultForm(comp) {
+  const wrap = document.createElement('div'); wrap.className = 'card';
+  wrap.style.cssText = 'padding:14px 16px;margin-bottom:14px;border:1px solid var(--gold)';
+  const f = S._resultDraft = S._resultDraft || { rendimiento_pct: 6, energia: 'parcial', ejecucion_plan: 'parcial', nervios: 3, vs_mejor_marca: 'igual' };
+
+  function field(label, inputHtml) {
+    return '<div style="margin-bottom:12px"><div style="font-size:0.78rem;color:var(--text2);margin-bottom:4px">' + label + '</div>' + inputHtml + '</div>';
+  }
+  function selectRow(name, options, current) {
+    return options.map(function(o) {
+      const active = current === o.v;
+      return '<button type="button" data-field="' + name + '" data-val="' + o.v + '" style="font-size:0.78rem;padding:6px 10px;margin-right:6px;margin-bottom:6px;border-radius:8px;border:1px solid ' + (active ? 'var(--gold)' : 'var(--border)') + ';background:' + (active ? 'var(--gold)' : 'transparent') + ';color:' + (active ? '#1a1a1a' : 'var(--text)') + ';cursor:pointer">' + o.label + '</button>';
+    }).join('');
+  }
+
+  wrap.innerHTML = '<div style="font-size:0.78rem;font-weight:700;color:var(--gold);margin-bottom:10px">' + comp.name + ' — ' + comp.type + '</div>'
+    + field('Prueba (ej. 100m Crol)', '<input id="rf-prueba" type="text" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="100m Crol">')
+    + field('Tiempo', '<input id="rf-tiempo" type="text" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="1:02.45">')
+    + field('¿Cómo calificarías tu rendimiento? (1-10)', '<input id="rf-rend" type="number" min="1" max="10" value="' + f.rendimiento_pct + '" style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)">')
+    + field('¿Llegaste con energía suficiente?', '<div id="rf-energia">' + selectRow('energia', [{v:'si',label:'Sí'},{v:'parcial',label:'Parcial'},{v:'no',label:'No'}], f.energia) + '</div>')
+    + field('¿Ejecutaste el plan de carrera?', '<div id="rf-ejecucion">' + selectRow('ejecucion_plan', [{v:'si',label:'Sí'},{v:'parcial',label:'Parcial'},{v:'no',label:'No'}], f.ejecucion_plan) + '</div>')
+    + field('Nervios previos (1 tranquilo - 5 muy nervioso)', '<input id="rf-nervios" type="number" min="1" max="5" value="' + f.nervios + '" style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)">')
+    + field('Comparado con tu mejor marca de temporada', '<div id="rf-vsmejor">' + selectRow('vs_mejor_marca', [{v:'mejor',label:'Mejor'},{v:'igual',label:'Igual'},{v:'peor',label:'Peor'}], f.vs_mejor_marca) + '</div>')
+    + field('Comentario (opcional)', '<textarea id="rf-comentario" rows="2" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="Qué cambiarías para la próxima"></textarea>')
+    + '<button id="rf-guardar" style="font-size:0.85rem;padding:9px 16px;border-radius:8px;border:none;background:var(--gold);color:#1a1a1a;font-weight:700;cursor:pointer;margin-top:4px">Guardar</button>'
+    + '<button id="rf-cancelar" style="font-size:0.85rem;padding:9px 16px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;margin-top:4px;margin-left:8px">Cancelar</button>';
+
+  wrap.querySelectorAll('button[data-field]').forEach(function(btn) {
+    btn.onclick = function() { f[btn.dataset.field] = btn.dataset.val; render(); };
+  });
+  wrap.querySelector('#rf-cancelar').onclick = function() { S.resultFormCompId = null; S._resultDraft = null; render(); };
+  wrap.querySelector('#rf-guardar').onclick = function() {
+    const prueba = wrap.querySelector('#rf-prueba').value.trim();
+    if (!prueba) { showConfirm('Falta la prueba', 'Indicá qué prueba nadaste (ej. 100m Crol).', function(){}); return; }
+    const payload = {
+      prueba: prueba,
+      tiempo: wrap.querySelector('#rf-tiempo').value.trim() || null,
+      rendimiento_pct: parseInt(wrap.querySelector('#rf-rend').value) || null,
+      energia: f.energia,
+      ejecucion_plan: f.ejecucion_plan,
+      nervios: parseInt(wrap.querySelector('#rf-nervios').value) || null,
+      vs_mejor_marca: f.vs_mejor_marca,
+      comentario: wrap.querySelector('#rf-comentario').value.trim() || null
+    };
+    dbSaveResult(S.athleteName, comp.id, payload).then(function(ok) {
+      if (!ok) { showConfirm('No se pudo guardar', 'Hubo un error de conexión. Intentá de nuevo.', function(){}); return; }
+      S.resultFormCompId = null; S._resultDraft = null;
+      DATA.pendingSurvey[S.athleteName] = undefined; // forzar recheck (puede haber más de una pendiente)
+      render();
+    });
+  };
+  return wrap;
+}
+
 function buildAthleteStats() {
   const d = document.createElement('div');
   // Si no hay historia cargada, la pedimos y re-renderizamos
@@ -3759,6 +3842,26 @@ function buildAthleteStats() {
     });
     d.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:40px;color:var(--text2);gap:10px"><span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Cargando estadísticas…</div>';
     return d;
+  }
+  // Encuesta post-competición pendiente (Nacional/Autonómico/Internacional, 5+ días después)
+  if (DATA.pendingSurvey[S.athleteName] === undefined) {
+    dbGetPendingSurvey(S.athleteName).then(function(c) {
+      DATA.pendingSurvey[S.athleteName] = c;
+      render();
+    });
+  } else {
+    const pend = DATA.pendingSurvey[S.athleteName];
+    if (pend && S.resultFormCompId !== pend.id) {
+      const banner = document.createElement('div'); banner.className = 'card';
+      banner.style.cssText = 'padding:14px 16px;margin-bottom:14px;border:1px solid var(--gold);background:rgba(255,184,48,0.08)';
+      banner.innerHTML = '<div style="font-size:0.78rem;font-weight:700;color:var(--gold);margin-bottom:4px">📋 Encuesta pendiente</div>'
+        + '<div style="font-size:0.85rem;color:var(--text);margin-bottom:10px">' + pend.name + ' (' + pend.type + ') — contanos cómo te fue</div>'
+        + '<button id="btn-open-result-form" style="font-size:0.8rem;padding:8px 14px;border-radius:8px;border:none;background:var(--gold);color:#1a1a1a;font-weight:700;cursor:pointer">Completar</button>';
+      d.appendChild(banner);
+      banner.querySelector('#btn-open-result-form').onclick = function() { S.resultFormCompId = pend.id; render(); };
+    } else if (pend && S.resultFormCompId === pend.id) {
+      d.appendChild(buildResultForm(pend));
+    }
   }
   const hist = DATA.athleteHist[S.athleteName] || [];
 
