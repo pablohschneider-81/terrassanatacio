@@ -952,6 +952,11 @@ async function dbGetPendingSurvey(name) {
   return null;
 }
 
+async function dbGetResultsByCompetition(competitionId) {
+  const rows = await sbFetch('results?competition_id=eq.' + competitionId + '&select=*,athletes(name)&order=created_at.desc');
+  return rows || [];
+}
+
 async function dbSaveResult(name, competitionId, data) {
   const athleteId = await dbAthleteId(name);
   if (!athleteId) return false;
@@ -1250,7 +1255,8 @@ let S = {
   pendingAthleteName: null,
   athletePinBuffer: '',
   athletePinError: '',
-  athletePinBusy: false
+  athletePinBusy: false,
+  viewResultsCompId: null
 };
 
 // ============================================================
@@ -1744,6 +1750,7 @@ function render() {
   app.appendChild(buildBottomNav());
 
   if (S.commentAthlete !== null) app.appendChild(buildCommentSheet());
+  if (S.viewResultsCompId) app.appendChild(buildResultsSheet());
 }
 
 // ============================================================
@@ -2719,6 +2726,8 @@ function buildCalendar() {
     const compsContainer = document.createElement('div'); compsContainer.className = 'comps-container'; d.appendChild(compsContainer);
     compsContainer.addEventListener('click', function(e) {
       const btn = e.target.closest('.comp-del');
+      const rbtn = e.target.closest('.comp-results');
+      if (rbtn) { S.viewResultsCompId = rbtn.dataset.id; render(); return; }
       if (!btn) return;
       const idx2 = parseInt(btn.dataset.idx);
       const comp2 = DATA.competitions[idx2];
@@ -2746,6 +2755,7 @@ function buildCalendar() {
         + '<div style="margin-top:8px;display:flex;align-items:center;gap:8px">'
         + '<span class="comp-badge" style="background:' + compColor(c.type) + ';color:' + contrastText(compColor(c.type)) + '">' + c.type + '</span>'
         + (isCoach ? '<button class="btn-del comp-del" data-idx="' + getCompetitions().indexOf(c) + '" style="padding:4px 10px">✕</button>' : '')
+        + (isCoach ? '<button class="comp-results" data-id="' + c.id + '" style="padding:4px 10px;font-size:0.7rem;border-radius:8px;border:1px solid var(--gold);background:transparent;color:var(--gold);cursor:pointer">📋 Encuestas</button>' : '')
         + '</div>'
         + '</div>'
         + mapSquare
@@ -4603,6 +4613,54 @@ function buildCommentSheet() {
   };
 
   sheet.append(title, ta, saveBtn);
+  overlay.appendChild(sheet);
+  return overlay;
+}
+
+function buildResultsSheet() {
+  const compId = S.viewResultsCompId;
+  const comp = DATA.competitions.find(c => c.id === compId);
+  const overlay = document.createElement('div'); overlay.className = 'overlay open';
+  overlay.onclick = function(e) { if (e.target === overlay) { S.viewResultsCompId = null; render(); } };
+
+  const sheet = document.createElement('div'); sheet.className = 'bottom-sheet';
+  const closeBtn = document.createElement('button'); closeBtn.className = 'sheet-close'; closeBtn.textContent = '✕';
+  closeBtn.onclick = function() { S.viewResultsCompId = null; render(); };
+
+  const title = document.createElement('div'); title.className = 'sheet-title';
+  title.innerHTML = '📋 Encuestas — <strong>' + (comp ? comp.name : '') + '</strong>';
+  title.appendChild(closeBtn);
+  sheet.appendChild(title);
+
+  const listWrap = document.createElement('div');
+  listWrap.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2);font-size:0.85rem"><span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Cargando…</div>';
+  sheet.appendChild(listWrap);
+
+  dbGetResultsByCompetition(compId).then(function(rows) {
+    listWrap.innerHTML = '';
+    if (!rows.length) {
+      listWrap.innerHTML = '<div style="padding:16px 4px;color:var(--text2);font-size:0.85rem">Todavía nadie respondió la encuesta de esta competición.</div>';
+      return;
+    }
+    rows.forEach(function(r) {
+      const card = document.createElement('div'); card.className = 'card';
+      card.style.cssText = 'padding:12px 14px;margin-bottom:10px;text-align:left';
+      const athName = r.athletes ? r.athletes.name : '—';
+      card.innerHTML =
+        '<div style="font-weight:700;font-size:0.9rem;color:var(--text);margin-bottom:4px">' + athName + '</div>'
+        + '<div style="font-size:0.8rem;color:var(--text2);margin-bottom:6px">' + (r.prueba || '') + (r.tiempo ? ' — ' + r.tiempo : '') + '</div>'
+        + '<div style="font-size:0.75rem;color:var(--text2);display:flex;flex-wrap:wrap;gap:8px">'
+        + (r.rendimiento_pct != null ? '<span>Rendimiento: <strong>' + r.rendimiento_pct + '/10</strong></span>' : '')
+        + (r.energia ? '<span>Energía: <strong>' + r.energia + '</strong></span>' : '')
+        + (r.ejecucion_plan ? '<span>Plan ejecutado: <strong>' + r.ejecucion_plan + '</strong></span>' : '')
+        + (r.nervios != null ? '<span>Nervios: <strong>' + r.nervios + '/5</strong></span>' : '')
+        + (r.vs_mejor_marca ? '<span>Vs mejor marca: <strong>' + r.vs_mejor_marca + '</strong></span>' : '')
+        + '</div>'
+        + (r.comentario ? '<div style="font-size:0.8rem;color:var(--text);margin-top:6px;font-style:italic">“' + r.comentario + '”</div>' : '');
+      listWrap.appendChild(card);
+    });
+  });
+
   overlay.appendChild(sheet);
   return overlay;
 }
