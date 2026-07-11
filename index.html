@@ -3371,6 +3371,30 @@ function buildAthleteInicio() {
     '<div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,rgba(41,128,185,0.8),rgba(52,152,219,0.6));border:1.5px solid rgba(255,255,255,0.8);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.9rem;color:#fff;box-shadow:0 2px 12px rgba(41,128,185,0.4)">' + initials + '</div>';
   d.appendChild(hdr);
 
+  // ── Encuesta post-competición pendiente ──
+  if (DATA.pendingSurvey[S.athleteName] === undefined) {
+    dbGetPendingSurvey(S.athleteName).then(function(c) {
+      DATA.pendingSurvey[S.athleteName] = c;
+      render();
+    }).catch(function(e) {
+      console.error('Error consultando encuesta pendiente', e);
+      DATA.pendingSurvey[S.athleteName] = null;
+    });
+  } else {
+    const pend = DATA.pendingSurvey[S.athleteName];
+    if (pend && S.resultFormCompId !== pend.id) {
+      const banner = document.createElement('div'); banner.className = 'card';
+      banner.style.cssText = 'padding:14px 16px;margin-bottom:14px;border:1px solid var(--gold);background:rgba(255,184,48,0.08)';
+      banner.innerHTML = '<div style="font-size:0.78rem;font-weight:700;color:var(--gold);margin-bottom:4px">📋 Encuesta pendiente</div>'
+        + '<div style="font-size:0.85rem;color:var(--text);margin-bottom:10px">' + pend.name + ' (' + pend.type + ') — contanos cómo te fue</div>'
+        + '<button id="btn-open-result-form" style="font-size:0.8rem;padding:8px 14px;border-radius:8px;border:none;background:var(--gold);color:#1a1a1a;font-weight:700;cursor:pointer">Completar</button>';
+      d.appendChild(banner);
+      banner.querySelector('#btn-open-result-form').onclick = function() { S.resultFormCompId = pend.id; render(); };
+    } else if (pend && S.resultFormCompId === pend.id) {
+      d.appendChild(buildResultForm(pend));
+    }
+  }
+
   // ── Barra HOY + Check-in de bienestar ──
   d.appendChild(buildHoyStrip());
   d.appendChild(buildWellnessCheckin());
