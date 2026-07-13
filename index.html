@@ -245,6 +245,13 @@
     box-shadow: 0 4px 14px rgba(52,152,219,0.45);
   }
   .nav-item.active svg { stroke-width: 2.1; }
+  .nav-item { position: relative; }
+  .nav-item .nav-dot {
+    position: absolute; top: 2px; right: 4px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #e74c3c; border: 1.5px solid #fff;
+    box-shadow: 0 0 0 1px rgba(231,76,60,0.3);
+  }
 
   /* CONTENT */
   .content { padding: 16px 16px 90px; flex: 1; background: transparent; }
@@ -696,9 +703,23 @@ async function dbAthleteId(name) {
   return found ? found.id : null;
 }
 async function dbAddAthlete(name) {
+  // 'name' tiene UNIQUE constraint en la tabla. El INSERT directo fallaba en
+  // silencio (409) si el nombre coincidía con un nadador desactivado, y el
+  // caller nunca chequeaba el resultado. Ahora se verifica antes de insertar:
+  // - Si existe y está activo -> duplicado real, se avisa.
+  // - Si existe pero está inactivo -> se reactiva (conserva RPE/asistencia/wellness).
+  // - Si no existe -> INSERT normal.
+  const existing = await sbFetch('athletes?name=eq.' + encodeURIComponent(name) + '&select=id,active');
+  if (existing && existing.length > 0) {
+    const row = existing[0];
+    if (row.active) return { ok: false, reason: 'duplicate_active' };
+    const reactivated = await sbFetch('athletes?id=eq.' + row.id, { method:'PATCH', body: JSON.stringify({ active: true }) });
+    _athleteCache = null;
+    return { ok: Array.isArray(reactivated) && reactivated.length > 0, reason: 'reactivated' };
+  }
   const res = await sbFetch('athletes', { method:'POST', body: JSON.stringify({ name }) });
   _athleteCache = null;
-  return res;
+  return { ok: !!res, reason: res ? 'created' : 'error' };
 }
 async function dbDeleteAthlete(name) {
   // Soft-delete: pone active=false en vez de borrar la fila.
@@ -2086,11 +2107,13 @@ function buildBottomNav() {
       {icon:'inscr',label:'Inscr.'},
       {icon:'natacion',label:'Sesión'}
     ];
+    const pending = athleteHasPendingToday(S.athleteName);
     items.forEach((item, i) => {
       const btn = document.createElement('button');
       btn.className = 'nav-item' + (S.ath_tab === i ? ' active' : '');
       btn.title = item.label;
       btn.innerHTML = `<svg viewBox="0 0 24 24">${NAV_ICONS[item.icon]}</svg>`;
+      if (i === 0 && pending) btn.innerHTML += '<span class="nav-dot"></span>';
       btn.onclick = () => { S.ath_tab = i; render(); };
       nav.appendChild(btn);
     });
@@ -2548,6 +2571,47 @@ function buildCoachSquad() {
     return d;
   }
 
+  const today = todayStr();
+  const wellToday = getDayWellness(today);
+  const rpeToday = getDayRPE(today);
+  const slotsToday = daySlots(getSession(today));
+  const adherence = athletes.map(function(name) {
+    const w = wellToday[name] || null;
+    const rpeEntry = normRPE(rpeToday[name]);
+    const missing = [];
+    if (!w) missing.push('Check-in');
+    slotsToday.forEach(function(s) {
+      if (!(rpeEntry && rpeEntry[s.slot])) missing.push('RPE ' + (s.slot === 'am' ? 'AM' : 'PM'));
+    });
+    return { name: name, missing: missing };
+  }).sort(function(a, b) {
+    const pa = a.missing.length > 0 ? 0 : 1, pb = b.missing.length > 0 ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    return a.name.localeCompare(b.name);
+  });
+
+  const pendingCount = adherence.filter(function(a){ return a.missing.length > 0; }).length;
+  const adhTitle = document.createElement('div'); adhTitle.className = 'section-title';
+  adhTitle.textContent = 'ADHERENCIA HOY' + (pendingCount > 0 ? ' · ' + pendingCount + ' pendiente' + (pendingCount !== 1 ? 's' : '') : ' · completo');
+  d.appendChild(adhTitle);
+
+  if (pendingCount === 0) {
+    const ok = document.createElement('div'); ok.className = 'card';
+    ok.style.cssText = 'padding:12px 14px;border:1px solid rgba(30,132,73,0.35);background:rgba(30,132,73,0.08)';
+    ok.innerHTML = '<div style="font-size:0.85rem;color:#1e8449;font-weight:700">✅ Todo el equipo completó check-in y RPE de hoy.</div>';
+    d.appendChild(ok);
+  } else {
+    const adhCard = document.createElement('div'); adhCard.className = 'card'; adhCard.style.padding = '4px 0';
+    adherence.filter(function(a){ return a.missing.length > 0; }).forEach(function(a, i) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:9px 14px;' + (i > 0 ? 'border-top:1px solid rgba(100,140,180,0.12)' : '');
+      row.innerHTML = '<span style="font-size:0.85rem;font-weight:600;color:#1a2a3a">' + a.name + '</span>' +
+        '<span style="font-size:0.68rem;font-weight:700;color:#c0392b">' + a.missing.join(' · ') + '</span>';
+      adhCard.appendChild(row);
+    });
+    d.appendChild(adhCard);
+  }
+
   const acwrData = athletes.map(function(name) {
     return { name: name, raw: calcACWR(name), info: acwrLabel(calcACWR(name)) };
   }).filter(function(x){ return x.info !== null; });
@@ -2852,9 +2916,14 @@ function buildCoachTeam() {
     const inp2 = document.getElementById('new-athlete-name');
     const val = inp2 ? inp2.value.trim().toUpperCase() : '';
     if (!val) return;
-    if (!getAthletes().includes(val)) {
-      dbAddAthlete(val).then(function() { renderAsync(); });
-    }
+    if (getAthletes().includes(val)) { alert('Ya hay un nadador activo con ese nombre.'); return; }
+    dbAddAthlete(val).then(function(r) {
+      if (r.reason === 'duplicate_active') alert('Ya existe un nadador con ese nombre.');
+      else if (r.reason === 'reactivated') alert(val + ' estaba desactivado — se reactivó junto con su historial.');
+      else if (r.reason === 'error') alert('No se pudo agregar el nadador. Probá de nuevo.');
+      if (inp2) inp2.value = '';
+      renderAsync();
+    });
   };
   row.append(inp, addBtn);
   addCard.appendChild(row);
@@ -3266,6 +3335,14 @@ function buildHistorialEncuestas() {
 // ============================================================
 // ATHLETE: INICIO
 // ============================================================
+function athleteHasPendingToday(name) {
+  const today = todayStr();
+  const w = todayWellness(name);
+  if (!w) return true;
+  const rpeEntry = normRPE(getDayRPE(today)[name]);
+  const slots = daySlots(getSession(today));
+  return slots.some(function(s){ return !(rpeEntry && rpeEntry[s.slot]); });
+}
 function buildHoyStrip() {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'display:flex;gap:7px;margin-bottom:16px';
