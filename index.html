@@ -1931,7 +1931,7 @@ function buildAthletePin() {
 
   const dots = document.createElement('div');
   dots.className = 'pin-dots';
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 6; i++) {
     const dot = document.createElement('div');
     dot.className = 'pin-dot' + (i < S.athletePinBuffer.length ? ' filled' : '');
     dots.appendChild(dot);
@@ -1979,10 +1979,10 @@ function buildAthletePin() {
       };
       if (k === '⌫') { S.athletePinBuffer = S.athletePinBuffer.slice(0,-1); S.athletePinError = ''; render(); }
       else if (k === '✓') {
-        if (S.athletePinBuffer.length === 4) trySubmit();
-      } else if (S.athletePinBuffer.length < 4) {
+        if (S.athletePinBuffer.length === 6) trySubmit();
+      } else if (S.athletePinBuffer.length < 6) {
         S.athletePinBuffer += k;
-        if (S.athletePinBuffer.length === 4) trySubmit();
+        if (S.athletePinBuffer.length === 6) trySubmit();
         else render();
       }
     };
@@ -2878,12 +2878,17 @@ function buildCoachTeam() {
     pinBtn.onclick = function() {
       const athlete = DATA.athletes.find(a => a.name === name);
       if (!athlete) return;
-      const pin = window.prompt('PIN de 4 dígitos para ' + name + ':');
-      if (!pin) return;
-      if (!/^\d{4}$/.test(pin)) { alert('El PIN debe ser de 4 dígitos numéricos.'); return; }
+      // Genera un PIN de 6 dígitos con crypto.getRandomValues (no Math.random) para
+      // que la aleatoriedad sea criptográficamente segura, igual que el hashing.
+      const bytes = new Uint32Array(1);
+      crypto.getRandomValues(bytes);
+      const pin = String(bytes[0] % 1000000).padStart(6, '0');
       sbFunctionCall('set-athlete-pin', { athlete_id: athlete.id, pin: pin }, true).then(function(r) {
-        if (r.ok) alert('PIN actualizado para ' + name + '.');
-        else alert('Error: ' + (r.data && r.data.error || 'no se pudo actualizar el PIN'));
+        if (r.ok) {
+          showConfirm('PIN generado para ' + name, '<b style="font-size:1.4rem;letter-spacing:2px">' + pin + '</b><br><br>Anotalo o comunícaselo ahora — no se va a volver a mostrar en ningún lado.', function(){}, { okText: 'Entendido', cancelText: 'Cerrar' });
+        } else {
+          alert('Error: ' + (r.data && r.data.error || 'no se pudo actualizar el PIN'));
+        }
       });
     };
     const del = document.createElement('button'); del.className = 'btn-del'; del.textContent = '✕';
