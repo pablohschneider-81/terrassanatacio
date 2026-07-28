@@ -255,7 +255,7 @@
 
   /* CONTENT */
   .content { padding: 16px 16px 90px; flex: 1; background: transparent; }
-  .section-title { font-size: 0.75rem; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--red2); margin-bottom: 12px; }
+  .section-title { font-size: 0.95rem; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--red2); margin-bottom: 14px; }
   .card {
     background: rgba(255,255,255,0.55);
     backdrop-filter: blur(20px) saturate(160%);
@@ -362,7 +362,7 @@
   .hist-day-name { font-size: 0.65rem; color: var(--text2); text-transform: uppercase; letter-spacing: 1px; }
   .hist-day-num { font-size: 1.3rem; font-weight: 700; line-height: 1; }
   .hist-month { font-size: 0.65rem; color: var(--text2); text-transform: uppercase; }
-  .hist-info { flex: 1; }
+  .hist-info { flex: 1; min-width: 0; }
   .hist-title { font-size: 0.9rem; font-weight: 600; color: var(--red2); }
   .hist-meta { font-size: 0.75rem; color: var(--text2); display: flex; gap: 10px; margin-top: 2px; }
   .hist-body { padding: 0 14px 14px; border-top: 1px solid var(--border); display: none; }
@@ -586,7 +586,7 @@
   @keyframes popIn { from{opacity:0;transform:scale(0.94)} to{opacity:1;transform:scale(1)} }
 
   /* ── Botón borrar entreno en historial ── */
-  .sess-del-btn { background:rgba(192,57,43,0.12); border:1px solid rgba(192,57,43,0.35); color:var(--red2); width:34px; height:34px; border-radius:9px; font-size:0.95rem; cursor:pointer; flex-shrink:0; margin-right:8px; transition:all 0.12s; }
+  .sess-del-btn { background:rgba(192,57,43,0.12); border:1px solid rgba(192,57,43,0.35); color:var(--red2); min-width:34px; height:34px; padding:0 6px; border-radius:9px; font-size:0.78rem; line-height:1; display:inline-flex; align-items:center; justify-content:center; white-space:nowrap; cursor:pointer; flex-shrink:0; margin-right:8px; transition:all 0.12s; }
   .sess-del-btn:active { transform:scale(0.9); background:rgba(192,57,43,0.25); }
 
   /* ── Botones abrir/cerrar inscripción ── */
@@ -786,7 +786,7 @@ async function dbGetAllSessions(weeks) {
   const byDate = {};
   rows.forEach(r => {
     if (!byDate[r.date]) byDate[r.date] = { am: null, pm: null };
-    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, duration: r.duration_min, alphaPhase: r.alpha_phase };
+    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, duration: r.duration_min, alphaPhase: r.alpha_phase, _id: r.id };
     byDate[r.date][r.slot] = sess;
   });
   _allSessionsCache = Object.entries(byDate).map(([date, data]) => ({ date, data })).sort((a,b) => b.date.localeCompare(a.date));
@@ -810,7 +810,7 @@ async function dbLoadSessionMonth(ym) {
   const byDate = {};
   rows.forEach(r => {
     if (!byDate[r.date]) byDate[r.date] = { am: null, pm: null };
-    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, duration: r.duration_min, alphaPhase: r.alpha_phase };
+    const sess = { ...r.content, title: r.title, phase: r.phase, targetRPE: r.target_rpe, duration: r.duration_min, alphaPhase: r.alpha_phase, _id: r.id };
     byDate[r.date][r.slot] = sess;
   });
   const existing = {}; (_allSessionsCache || []).forEach(function(s){ existing[s.date] = s; });
@@ -1740,6 +1740,306 @@ function acwrLabel(ratio) {
 // ============================================================
 // MAIN RENDER
 // ============================================================
+// ===== FUERZA (NeuroForce) — vista del COACH =====
+async function dbLoadCoachStrength() {
+  const [ex, aths, sets, bws] = await Promise.all([
+    DATA.strengthEx ? Promise.resolve(DATA.strengthEx) : sbFetch('strength_exercises?select=id,name,uses_bodyweight&order=id'),
+    sbFetch('athletes?select=id,name&active=eq.true&order=name'),
+    sbFetch('strength_sets?select=athlete_id,exercise_id,date,load_kg,reps,rir&order=date.desc'),
+    sbFetch('bodyweight_entries?select=athlete_id,date,weight_kg&order=date.desc')
+  ]);
+  DATA.strengthEx = ex || [];
+  DATA.coachStrAthletes = aths || [];
+  const latest = {}; (sets || []).forEach(function (r) { const k = r.athlete_id + '|' + r.exercise_id; if (!latest[k]) latest[k] = r; });
+  DATA.coachStrLatest = latest;
+  const bw = {}; (bws || []).forEach(function (r) { if (!(r.athlete_id in bw)) bw[r.athlete_id] = r.weight_kg; });
+  DATA.coachStrBw = bw;
+}
+
+async function dbSaveBodyweight(athleteId, weight) {
+  const res = await sbFetch('bodyweight_entries?on_conflict=athlete_id,date', {
+    method: 'POST', prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify({ athlete_id: athleteId, date: todayStr(), weight_kg: weight })
+  });
+  DATA.coachStrBw = undefined;
+  return res;
+}
+
+// e1RM ajustado por RIR: reps efectivas = reps + rir
+function e1rmAdj(effLoad, reps, rir) { return effLoad * (1 + (reps + (rir || 0)) / 30); }
+
+function buildCoachStrength() {
+  const d = document.createElement('div');
+
+  if (DATA.coachStrBw === undefined || DATA.coachStrLatest === undefined) {
+    if (!S._cstrLoading) { S._cstrLoading = true; dbLoadCoachStrength().then(function () { S._cstrLoading = false; render(); }); }
+    d.innerHTML = '<div class="card"><div class="card-sub" style="text-align:center">Cargando…</div></div>';
+    return d;
+  }
+
+  if (S.coachStrReps === undefined) S.coachStrReps = 6;
+  if (S.coachStrRir === undefined) S.coachStrRir = 2;
+  S.coachStrBwInput = S.coachStrBwInput || {};
+
+  // Objetivo próxima semana
+  const tgt = document.createElement('div'); tgt.className = 'card'; tgt.style.marginBottom = '16px';
+  tgt.innerHTML = '<div class="card-title">Objetivo próxima semana</div>'
+    + '<div class="card-sub">La carga sugerida se calcula contra esto.</div>';
+  const trow = document.createElement('div'); trow.style.cssText = 'display:flex;gap:10px;margin-top:10px';
+  [['coachStrReps', 'Reps'], ['coachStrRir', 'RIR']].forEach(function (f) {
+    const wrap = document.createElement('div'); wrap.style.flex = '1';
+    const lbl = document.createElement('div'); lbl.className = 'field-label'; lbl.textContent = f[1];
+    const inp = document.createElement('input'); inp.type = 'number'; inp.inputMode = 'numeric'; inp.value = S[f[0]];
+    inp.onchange = function (e) { S[f[0]] = Number(e.target.value); render(); };  // recalcula al salir del campo
+    wrap.appendChild(lbl); wrap.appendChild(inp); trow.appendChild(wrap);
+  });
+  tgt.appendChild(trow);
+  d.appendChild(tgt);
+
+  const R = S.coachStrReps, r = S.coachStrRir;
+
+  (DATA.coachStrAthletes || []).forEach(function (a) {
+    const bw = DATA.coachStrBw[a.id];
+    const card = document.createElement('div'); card.className = 'card'; card.style.marginBottom = '12px';
+
+    // cabecera + peso corporal
+    const head = document.createElement('div'); head.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px';
+    const nm = document.createElement('div'); nm.className = 'card-title'; nm.style.cssText = 'margin:0;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; nm.textContent = a.name;
+    head.appendChild(nm);
+    const bwWrap = document.createElement('div'); bwWrap.style.cssText = 'display:flex;align-items:center;gap:6px';
+    const bwIn = document.createElement('input'); bwIn.type = 'number'; bwIn.inputMode = 'decimal';
+    bwIn.placeholder = 'peso'; bwIn.style.cssText = 'width:70px;text-align:right';
+    bwIn.value = (S.coachStrBwInput[a.id] !== undefined) ? S.coachStrBwInput[a.id] : (bw != null ? bw : '');
+    bwIn.oninput = function (e) { S.coachStrBwInput[a.id] = e.target.value; };
+    const bwBtn = document.createElement('button'); bwBtn.className = 'btn'; bwBtn.textContent = 'kg';
+    bwBtn.style.cssText = 'padding:8px 12px;min-width:auto';
+    bwBtn.onclick = function () {
+      const v = S.coachStrBwInput[a.id]; if (v === '' || v == null) return;
+      bwBtn.textContent = '…'; bwBtn.disabled = true;
+      dbSaveBodyweight(a.id, Number(v)).then(function () { S.coachStrBwInput[a.id] = undefined; render(); });
+    };
+    bwWrap.appendChild(bwIn); bwWrap.appendChild(bwBtn); head.appendChild(bwWrap);
+    card.appendChild(head);
+
+    // tabla de ejercicios
+    (DATA.strengthEx || []).forEach(function (ex) {
+      const s = DATA.coachStrLatest[a.id + '|' + ex.id];
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-top:1px solid rgba(100,150,190,0.15);font-size:0.82rem';
+
+      let lastTxt = '<span style="color:var(--text3)">sin dato</span>';
+      let rmTxt = '—', relTxt = '', sugTxt = '—';
+
+      if (s) {
+        lastTxt = s.load_kg + '×' + s.reps + (s.rir != null ? ' · RIR ' + s.rir : '');
+        const needsBw = ex.uses_bodyweight;
+        if (needsBw && bw == null) {
+          rmTxt = '<span style="color:var(--text3)">falta peso</span>';
+          sugTxt = '—';
+        } else {
+          const eff = needsBw ? s.load_kg + bw : s.load_kg;
+          const e1 = e1rmAdj(eff, s.reps, s.rir || 0);
+          rmTxt = e1.toFixed(0) + ' kg';
+          if (bw != null) relTxt = ' · ' + (e1 / bw).toFixed(2) + '×';
+          const sugEff = e1 / (1 + (R + r) / 30);
+          const sug = needsBw ? sugEff - bw : sugEff;          // pull-up: descuenta el peso corporal
+          sugTxt = (sug <= 0 ? 'peso corp. (asistir)' : '<strong style="color:var(--accent2)">' + sug.toFixed(1) + ' kg</strong>');
+        }
+      }
+
+      row.innerHTML =
+        '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + ex.name + '</div>'
+        + '<div style="font-size:0.72rem;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">últ: ' + lastTxt + '</div></div>'
+        + '<div style="text-align:right;min-width:54px;flex-shrink:0"><div style="font-size:0.62rem;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">1RM' + relTxt + '</div>'
+        + '<div style="font-family:monospace;font-weight:700;color:var(--text)">' + rmTxt + '</div></div>'
+        + '<div style="text-align:right;min-width:70px;flex-shrink:0"><div style="font-size:0.62rem;letter-spacing:.5px;text-transform:uppercase;color:var(--text3)">sugerido</div>'
+        + '<div style="font-family:monospace">' + sugTxt + '</div></div>';
+      card.appendChild(row);
+    });
+
+    d.appendChild(card);
+  });
+
+  return d;
+}
+
+
+// ===== FUERZA (NeuroForce) — módulo del atleta =====
+// ── Datos ─────────────────────────────────────────────────────────
+async function dbLoadAthleteStrength(name) {
+  const id = await dbAthleteId(name);
+  if (!id) { DATA.strengthEx = []; DATA.athStrToday = {}; DATA.athStrTrend = {}; return; }
+  const today = todayStr();
+  const [ex, todayRows, trendRows] = await Promise.all([
+    DATA.strengthEx ? Promise.resolve(DATA.strengthEx)
+                    : sbFetch('strength_exercises?select=id,name,uses_bodyweight&order=id'),
+    sbFetch('strength_sets?athlete_id=eq.' + id + '&date=eq.' + today + '&set_num=eq.1&select=exercise_id,load_kg,reps,rir'),
+    sbFetch('v_strength_estimation_athlete?select=exercise,date,rm_est&order=date.asc')
+  ]);
+  DATA.strengthEx = ex || [];
+  const tmap = {}; (todayRows || []).forEach(function (r) { tmap[r.exercise_id] = { load: r.load_kg, reps: r.reps, rir: r.rir }; });
+  DATA.athStrToday = tmap;
+  const trend = {}; (trendRows || []).forEach(function (r) { (trend[r.exercise] = trend[r.exercise] || []).push(r.rm_est); });
+  DATA.athStrTrend = trend;
+}
+
+async function dbSaveStrengthSet(name, exerciseId, load, reps, rir, sessionId) {
+  const id = await dbAthleteId(name);
+  if (!id) return null;
+  // Upsert atómico por (athlete_id, exercise_id, date, set_num) — mismo patrón que RPE.
+  const res = await sbFetch('strength_sets?on_conflict=athlete_id,exercise_id,date,set_num', {
+    method: 'POST',
+    prefer: 'resolution=merge-duplicates,return=representation',
+    body: JSON.stringify({
+      athlete_id: id, exercise_id: exerciseId, date: todayStr(), set_num: 1,
+      load_kg: load, reps: reps, rir: rir,
+      is_estimation: (Number(rir) === 0),   // solo la serie a RIR 0 alimenta el 1RM
+      phase: 'intensification',
+      session_id: sessionId || null          // enlaza la serie al entreno de físico del día
+    })
+  });
+  DATA.athStrTrend = undefined;             // fuerza recarga de la tendencia
+  return res;
+}
+
+// ── Mini-sparkline (SVG) ──────────────────────────────────────────
+function strengthSpark(data, w, h) {
+  w = w || 110; h = h || 32;
+  if (!data || data.length < 2) return '';
+  const min = Math.min.apply(null, data), max = Math.max.apply(null, data), rng = (max - min) || 1;
+  const pts = data.map(function (v, i) {
+    return [(i / (data.length - 1)) * (w - 4) + 2, h - 4 - ((v - min) / rng) * (h - 8)];
+  });
+  const dPath = pts.map(function (p, i) { return (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' ');
+  const last = pts[pts.length - 1];
+  return '<svg width="' + w + '" height="' + h + '" style="display:block">'
+    + '<path d="' + dPath + '" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+    + '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="3" fill="var(--accent)"/></svg>';
+}
+
+// ── Pantalla ──────────────────────────────────────────────────────
+// Ejercicio del catálogo → campo de texto libre que el coach escribió
+// en la sesión de físico para esa categoría biomecánica (Pull/Push/Lower Body).
+const STRENGTH_NOTE_FIELD = { 1: 'pullText', 2: 'pushText', 3: 'lowerText' };
+
+function buildAthleteStrength() {
+  const d = document.createElement('div');
+  const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'FUERZA';
+  d.appendChild(st);
+
+  // Igual que Mi RPE: Fuerza cuelga de la sesión programada para hoy.
+  // Solo se habilita si hay un turno con phase === 'Fuerza' (entreno de físico).
+  const today = todayStr();
+  const rawSession = getSession(today);
+  const slots = daySlots(rawSession);
+  const fuerzaSlot = slots.find(function (s) { return s.sess && s.sess.phase === 'Fuerza'; });
+
+  if (!fuerzaSlot) {
+    const empty = document.createElement('div'); empty.className = 'card';
+    empty.innerHTML = '<div class="card-sub" style="text-align:center">Hoy no tienes entreno de físico programado.</div>';
+    d.appendChild(empty);
+    return d;
+  }
+  const sessObj = fuerzaSlot.sess;
+  const sessionId = sessObj._id || null;
+
+  // Carga perezosa (patrón cache-then-render)
+  if (DATA.athStrTrend === undefined) {
+    if (!S._strLoading) {
+      S._strLoading = true;
+      dbLoadAthleteStrength(S.athleteName).then(function () { S._strLoading = false; render(); });
+    }
+    const loading = document.createElement('div'); loading.className = 'card';
+    loading.innerHTML = '<div class="card-sub" style="text-align:center">Cargando…</div>';
+    d.appendChild(loading);
+    return d;
+  }
+
+  S.strInput = S.strInput || {};
+
+  const intro = document.createElement('div'); intro.className = 'card'; intro.style.marginBottom = '16px';
+  intro.innerHTML = '<div class="card-title">' + (sessObj.title || 'Físico · hoy') + '</div>'
+    + '<div class="card-sub">Registra el peso, las reps y el RIR de tu serie principal. Tu 1RM va subiendo con el tiempo.</div>';
+  d.appendChild(intro);
+
+  (DATA.strengthEx || []).forEach(function (ex) {
+    const saved = DATA.athStrToday[ex.id];
+    if (S.strInput[ex.id] === undefined) {
+      S.strInput[ex.id] = saved
+        ? { load: saved.load, reps: saved.reps, rir: saved.rir }
+        : { load: '', reps: '', rir: '' };
+    }
+    const inputVal = S.strInput[ex.id];
+    const trend = DATA.athStrTrend[ex.name] || [];
+    const lastRm = trend.length ? trend[trend.length - 1] : null;
+    const noteTxt = sessObj[STRENGTH_NOTE_FIELD[ex.id]];
+
+    const card = document.createElement('div'); card.className = 'card'; card.style.marginBottom = '12px';
+
+    // cabecera: nombre + 1RM estimado
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px';
+    head.innerHTML = '<div class="card-title" style="margin:0">' + ex.name + '</div>'
+      + '<div style="text-align:right">'
+      + '<div style="font-size:0.62rem;letter-spacing:1px;text-transform:uppercase;color:var(--text3)">1RM est.</div>'
+      + '<div style="font-family:monospace;font-weight:700;font-size:1.3rem;color:var(--text)">' + (lastRm != null ? lastRm : '—') + '<span style="font-size:0.7rem;color:var(--text3)"> kg</span></div>'
+      + '</div>';
+    card.appendChild(head);
+
+    // nota del coach para esta categoría (Pull/Push/Lower Body) — si escribió algo
+    if (noteTxt) {
+      const note = document.createElement('div');
+      note.style.cssText = 'font-size:0.78rem;color:var(--text2);background:rgba(41,128,185,0.08);border-radius:8px;padding:8px 10px;margin-bottom:12px;white-space:pre-wrap';
+      note.textContent = noteTxt;
+      card.appendChild(note);
+    }
+
+    // inputs carga / reps / rir
+    const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:10px;margin-bottom:10px';
+    [['load', 'Carga', 'kg'], ['reps', 'Reps', ''], ['rir', 'RIR', '']].forEach(function (f) {
+      const wrap = document.createElement('div'); wrap.style.flex = '1';
+      const lbl = document.createElement('div'); lbl.className = 'field-label'; lbl.textContent = f[1] + (f[2] ? ' (' + f[2] + ')' : '');
+      const inp = document.createElement('input'); inp.type = 'number'; inp.inputMode = 'decimal';
+      inp.value = inputVal[f[0]]; inp.placeholder = '—';
+      inp.oninput = function (e) { S.strInput[ex.id][f[0]] = e.target.value; };  // sin render: no pierde foco
+      wrap.appendChild(lbl); wrap.appendChild(inp); row.appendChild(wrap);
+    });
+    card.appendChild(row);
+
+    // tendencia
+    if (trend.length >= 2) {
+      const sp = document.createElement('div'); sp.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:10px';
+      sp.innerHTML = strengthSpark(trend);
+      card.appendChild(sp);
+    }
+
+    // guardar
+    const btn = document.createElement('button'); btn.className = 'btn btn-primary';
+    btn.textContent = saved ? 'Actualizar' : 'Guardar';
+    btn.onclick = function () {
+      const v = S.strInput[ex.id];
+      if (v.load === '' || v.reps === '') { alert('Pon al menos carga y reps'); return; }
+      btn.disabled = true; btn.textContent = 'Guardando…';
+      dbSaveStrengthSet(S.athleteName, ex.id, Number(v.load), Number(v.reps), v.rir === '' ? null : Number(v.rir), sessionId)
+        .then(function (res) {
+          if (!res) {
+            btn.disabled = false; btn.textContent = '⚠ No se guardó — reintenta';
+            btn.style.background = '#e74c3c';
+            setTimeout(function () { btn.textContent = 'Guardar'; btn.style.background = ''; }, 2800);
+            return;
+          }
+          S.strInput[ex.id] = undefined;   // reseed desde lo guardado
+          render();
+        });
+    };
+    card.appendChild(btn);
+    d.appendChild(card);
+  });
+
+  return d;
+}
+
+
 function render() {
   const app = document.getElementById('app');
   app.innerHTML = '';
@@ -1756,14 +2056,11 @@ function render() {
   content.className = 'content';
 
   if (S.role === 'coach') {
-    const tabs = ['Sesión','RPE','Escuadra','Calend.','Inscr.','Equipo','Historial','Asist.'];
-    content.appendChild(buildTabs(tabs, S.tab, i => { S.tab = i; if(i===3){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
+    // La navegación vive solo en el menú inferior; aquí ya no se pinta la fila de tabs.
     const views = [buildCoachSession, buildCoachRPE, buildCoachSquad, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial, buildCoachAttendance];
     content.appendChild(views[S.tab]());
   } else {
-    const tabs = ['Inicio','Mi RPE','Calend.','Inscr.','Sesión'];
-    content.appendChild(buildTabs(tabs, S.ath_tab, i => { S.ath_tab = i; if(i===2){S.calYear=new Date().getFullYear();S.calMonth=new Date().getMonth();} render(); }));
-    const views = [buildAthleteInicio, buildAthleteRPE, buildCalendar, buildAthleteInscripcions, buildAthleteSession];
+    const views = [buildAthleteInicio, buildAthleteRPE, buildAthleteStrength, buildCalendar, buildAthleteInscripcions, buildAthleteSession];
     content.appendChild(views[S.ath_tab]());
   }
 
@@ -2053,7 +2350,7 @@ function buildTabs(labels, active, onClick) {
   nav.style.cssText = 'display:flex;gap:4px;margin-bottom:16px;background:rgba(255,255,255,0.35);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.7);border-radius:10px;padding:4px;';
   labels.forEach((lbl, i) => {
     const btn = document.createElement('button');
-    btn.style.cssText = `flex:1;padding:8px 4px;border-radius:7px;border:none;font-size:0.72rem;font-weight:600;cursor:pointer;transition:all 0.15s;background:${i===active?'var(--accent)':'transparent'};color:${i===active?'#fff':'var(--text2)'};`;
+    btn.style.cssText = `flex:1;min-width:0;padding:8px 3px;border-radius:7px;border:none;font-size:0.72rem;font-weight:600;cursor:pointer;transition:all 0.15s;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:${i===active?'var(--accent)':'transparent'};color:${i===active?'#fff':'var(--text2)'};`;
     btn.textContent = lbl;
     btn.onclick = () => onClick(i);
     nav.appendChild(btn);
@@ -2075,6 +2372,7 @@ const NAV_ICONS = {
   asistencia: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 10.5l2.5 2.5L16 8"/>',
   inicio: '<path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9a1 1 0 0 0 1 1h3v-5h4v5h3a1 1 0 0 0 1-1v-9"/>',
   mirpe: '<path d="M6.5 16.5 3 13l2-2 3.5 3.5"/><path d="M17.5 7.5 21 11l-2 2-3.5-3.5"/><path d="M9 15l6-6"/><path d="M5 9l2-2M17 19l2-2"/>',
+  fuerza: '<path d="M6.5 6.5v11M17.5 6.5v11M4 9v6M20 9v6M6.5 12h11"/>',
   natacion: '<circle cx="7" cy="6" r="2"/><path d="M5 10.5 9 8l3 2.5 3-2 4 2"/><path d="M2 16c1.4 1.4 2.8 1.4 4.2 0s2.8-1.4 4.2 0 2.8 1.4 4.2 0 2.8-1.4 4.2 0"/><path d="M2 19.5c1.4 1.4 2.8 1.4 4.2 0s2.8-1.4 4.2 0 2.8 1.4 4.2 0 2.8-1.4 4.2 0"/>'
 };
 function buildBottomNav() {
@@ -2103,6 +2401,7 @@ function buildBottomNav() {
     const items = [
       {icon:'inicio',label:'Inicio'},
       {icon:'mirpe',label:'Mi RPE'},
+      {icon:'fuerza',label:'Fuerza'},
       {icon:'calend',label:'Calend.'},
       {icon:'inscr',label:'Inscr.'},
       {icon:'natacion',label:'Sesión'}
@@ -2364,6 +2663,8 @@ function updateMeters(container) {
 // ============================================================
 function buildCoachRPE() {
   const d = document.createElement('div');
+  const stTop = document.createElement('div'); stTop.className = 'section-title'; stTop.textContent = 'RPE';
+  d.appendChild(stTop);
   const today = todayStr();
   const session = getSession(today);
   const dayRPE = getDayRPE(today);
@@ -2554,6 +2855,8 @@ function buildCoachRPE() {
 
 function buildCoachSquad() {
   const d = document.createElement('div');
+  const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'ESCUADRA';
+  d.appendChild(st);
   const athletes = getAthletes();
 
   // ── Cargar historial de todos + asistencia (una sola vez por sesión de la app) ──
@@ -2696,6 +2999,8 @@ function buildCoachSquad() {
 function buildCalendar() {
   const isCoach = S.role === 'coach';
   const d = document.createElement('div');
+  const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'CALENDARIO';
+  d.appendChild(st);
   const today = new Date();
   const year = S.calYear, month = S.calMonth;
   const competitions = getCompetitions();
@@ -3129,10 +3434,11 @@ function buildCoachHistorial() {
     b.onclick = function() { S.histView = key; render(); };
     return b;
   };
-  toggle.append(mkToggleBtn('Entrenos', 'entrenos'), mkToggleBtn('Encuestas', 'encuestas'));
+  toggle.append(mkToggleBtn('Entrenos', 'entrenos'), mkToggleBtn('Encuestas', 'encuestas'), mkToggleBtn('Fuerza', 'fuerza'));
   d.appendChild(toggle);
 
   if (S.histView === 'encuestas') { d.appendChild(buildHistorialEncuestas()); return d; }
+  if (S.histView === 'fuerza') { d.appendChild(buildCoachStrength()); return d; }
 
   const st0 = document.createElement('div'); st0.className = 'section-title'; st0.textContent = 'HISTORIAL DE SESIONES';
   d.appendChild(st0);
@@ -3219,20 +3525,23 @@ function buildCoachHistorial() {
       render();
     };
 
-    // Un botón de editar por cada turno existente (mañana / tarde)
+    // Un solo lápiz en la fila colapsada — solo cuando hay un único turno.
+    // Con turno doble (mañana+tarde) el lápiz de cada uno vive junto a su
+    // propia etiqueta dentro del desplegable (hay sitio de sobra ahí).
     const editBtns = [];
-    hdrSlots.forEach(function(sl) {
+    if (hdrSlots.length === 1) {
+      const sl = hdrSlots[0];
       const eb = document.createElement('button');
       eb.className = 'sess-del-btn';
-      eb.innerHTML = hdrSlots.length > 1 ? (sl.slot === 'am' ? '✏️☀️' : '✏️🌙') : '✏️';
-      eb.title = 'Editar ' + (sl.slot === 'am' ? 'mañana' : sl.slot === 'pm' ? 'tarde' : 'sesión');
+      eb.innerHTML = '✏️';
+      eb.title = 'Editar sesión';
       eb.style.marginRight = '4px';
       eb.onclick = function(ev) {
         ev.stopPropagation();
         loadSlotForEdit(sl.sess, sl.slot);
       };
       editBtns.push(eb);
-    });
+    }
 
     // Botón borrar entreno (solo coach)
     const delBtn = document.createElement('button');
@@ -3255,9 +3564,11 @@ function buildCoachHistorial() {
       });
     };
 
-    header.append(dateBlock, info);
-    editBtns.forEach(function(eb){ header.appendChild(eb); });
-    header.append(delBtn, arrow);
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;align-items:center;gap:4px;flex-shrink:0;';
+    editBtns.forEach(function(eb){ actions.appendChild(eb); });
+    actions.append(delBtn, arrow);
+    header.append(dateBlock, info, actions);
     header.onclick = function() { S.histSessionOpen[s.date] = !S.histSessionOpen[s.date]; render(); };
     row.appendChild(header);
 
@@ -3268,10 +3579,19 @@ function buildCoachHistorial() {
       histSlots.forEach(function(slotObj, si) {
         const sess2 = slotObj.sess;
         if (histSlots.length > 1) {
-          const sh = document.createElement('div');
-          sh.style.cssText = 'font-size:0.78rem;font-weight:700;color:var(--gold);margin-top:' + (si > 0 ? '16px' : '8px') + ';padding-bottom:4px;border-bottom:1px solid var(--border)';
-          sh.textContent = slotObj.label || '☀️ Mañana';
-          body.appendChild(sh);
+          const shRow = document.createElement('div');
+          shRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:' + (si > 0 ? '16px' : '8px') + ';padding-bottom:4px;border-bottom:1px solid var(--border)';
+          const shLbl = document.createElement('span');
+          shLbl.style.cssText = 'font-size:0.78rem;font-weight:700;color:var(--gold)';
+          shLbl.textContent = slotObj.label || '☀️ Mañana';
+          const slotEditBtn = document.createElement('button');
+          slotEditBtn.className = 'sess-del-btn';
+          slotEditBtn.innerHTML = '✏️';
+          slotEditBtn.title = 'Editar ' + (slotObj.slot === 'am' ? 'mañana' : 'tarde');
+          slotEditBtn.style.cssText = 'min-width:28px;height:28px;font-size:0.7rem;margin-right:0;flex-shrink:0;';
+          slotEditBtn.onclick = function(ev) { ev.stopPropagation(); loadSlotForEdit(sess2, slotObj.slot); };
+          shRow.append(shLbl, slotEditBtn);
+          body.appendChild(shRow);
         }
         if (sess2.phase === 'Fuerza') {
           if (sess2.alphaPhase) {
@@ -3729,6 +4049,8 @@ function buildAthleteInicio() {
 // ============================================================
 function buildAthleteRPE() {
   const d = document.createElement('div');
+  const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'MI RPE';
+  d.appendChild(st);
   const today = todayStr();
   const rawSession = getSession(today);
   const slots = daySlots(rawSession);
@@ -3877,6 +4199,8 @@ function buildAthleteRPE() {
 // ============================================================
 function buildAthleteSession() {
   const d = document.createElement('div');
+  const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'SESIÓN';
+  d.appendChild(st);
   const today = new Date();
   const todayS = todayStr();
 
@@ -4483,10 +4807,14 @@ function inscCompSelector(comps, activeId, onPick) {
 // ============================================================
 function buildAthleteInscripcions() {
   const d = document.createElement('div');
+  const stTop = document.createElement('div'); stTop.className = 'section-title'; stTop.textContent = 'INSCRIPCIONES';
+  d.appendChild(stTop);
   const comps = inscEligibleComps();
 
   if (comps.length === 0) {
-    d.innerHTML = '<div class="empty-state">No hay competiciones próximas.<br>Cuando el entrenador añada una al calendario, podrás inscribirte aquí.</div>';
+    const empty = document.createElement('div'); empty.className = 'empty-state';
+    empty.innerHTML = 'No hay competiciones próximas.<br>Cuando el entrenador añada una al calendario, podrás inscribirte aquí.';
+    d.appendChild(empty);
     return d;
   }
 
@@ -4583,10 +4911,14 @@ function buildAthleteInscripcions() {
 // ============================================================
 function buildCoachInscripcions() {
   const d = document.createElement('div');
+  const stTop = document.createElement('div'); stTop.className = 'section-title'; stTop.textContent = 'INSCRIPCIONES';
+  d.appendChild(stTop);
   const comps = inscEligibleComps();
 
   if (comps.length === 0) {
-    d.innerHTML = '<div class="empty-state">No hay competiciones próximas.<br>Añade una en el calendario: la ventana de inscripción se calcula sola (abre 20 días antes, dura 5).</div>';
+    const empty = document.createElement('div'); empty.className = 'empty-state';
+    empty.innerHTML = 'No hay competiciones próximas.<br>Añade una en el calendario: la ventana de inscripción se calcula sola (abre 20 días antes, dura 5).';
+    d.appendChild(empty);
     return d;
   }
 
