@@ -574,7 +574,7 @@
   .acwr-lbl { font-size:0.6rem; letter-spacing:0.5px; text-transform:uppercase; font-weight:700; margin-top:2px; }
   .confirm-back { position:fixed; inset:0; background:rgba(4,16,31,0.78); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:200; padding:24px; animation:fadeIn 0.15s ease; }
   .confirm-box { background:rgba(16,37,88,0.82); backdrop-filter:blur(24px) saturate(180%); -webkit-backdrop-filter:blur(24px) saturate(180%); border:1px solid rgba(52,152,219,0.25); border-radius:18px; padding:24px 22px; max-width:380px; width:100%; box-shadow:0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.07); animation:popIn 0.18s ease; }
-  .confirm-title { font-size:1.05rem; font-weight:700; color:var(--text); margin-bottom:8px; }
+  .confirm-title { font-size:1.05rem; font-weight:700; color:#eaf2f8; margin-bottom:8px; }
   .confirm-msg { font-size:0.86rem; color:var(--text2); line-height:1.5; margin-bottom:20px; }
   .confirm-btns { display:flex; gap:10px; }
   .confirm-btns button { flex:1; padding:13px; border-radius:11px; border:none; font-size:0.92rem; font-weight:700; cursor:pointer; transition:transform 0.1s; }
@@ -2345,19 +2345,6 @@ function buildHeader() {
 // ============================================================
 // TABS
 // ============================================================
-function buildTabs(labels, active, onClick) {
-  const nav = document.createElement('div');
-  nav.style.cssText = 'display:flex;gap:4px;margin-bottom:16px;background:rgba(255,255,255,0.35);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.7);border-radius:10px;padding:4px;';
-  labels.forEach((lbl, i) => {
-    const btn = document.createElement('button');
-    btn.style.cssText = `flex:1;min-width:0;padding:8px 3px;border-radius:7px;border:none;font-size:0.72rem;font-weight:600;cursor:pointer;transition:all 0.15s;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:${i===active?'var(--accent)':'transparent'};color:${i===active?'#fff':'var(--text2)'};`;
-    btn.textContent = lbl;
-    btn.onclick = () => onClick(i);
-    nav.appendChild(btn);
-  });
-  return nav;
-}
-
 // ============================================================
 // BOTTOM NAV
 // ============================================================
