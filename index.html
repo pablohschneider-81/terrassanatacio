@@ -691,6 +691,23 @@ const COACH_EMAIL = 'pablohschneider@gmail.com'; // solo prefill del formulario 
 let SB_ACCESS_TOKEN = null; // no restauramos token viejo al arrancar: caducaría y daría un 401 falso ("clave revocada"). El coach re-loguea por sesión.
 let COACH_CREDS = null; // {email,password} SOLO en memoria durante la sesion; nunca se guarda en disco ni se hardcodea
 
+// Tras iniciar sesión: mira el estado real del coach (pending/approved) y quién es admin.
+// Devuelve 'approved' | 'pending' | 'rejected' | null (error de red)
+async function fetchCoachStatus() {
+  try {
+    const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/my_coach_status', {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    if (!res.ok) return null;
+    const rows = await res.json();
+    if (!rows || !rows[0]) return null;
+    S.isAdmin = !!rows[0].is_admin;
+    return rows[0].status;
+  } catch (e) { console.error('fetchCoachStatus', e.message); return null; }
+}
+
 async function coachSignIn(email, password) {
   // Sin argumentos = reintento silencioso con las credenciales en memoria (p.ej. token expirado)
   if (!email || !password) {
@@ -1300,8 +1317,13 @@ const FATIGUE = [
 
 let S = {
   // auth
-  role: null, // 'coach' | 'athlete'
+  role: null, // 'coach' | 'athlete' | 'coach_pending'
   athleteName: null,
+  pinMode: 'login', // 'login' | 'signup'
+  isAdmin: false,
+  showCoachAdmin: false,
+  coachList: null,
+  adminBusy: false,
   // coach form
   tab: 0,
   sessionTitle: '',
@@ -2130,6 +2152,7 @@ function render() {
   if (!S.role) { app.appendChild(buildLogin()); return; }
   if (S.role === 'pin') { app.appendChild(buildPin()); return; }
   if (S.role === 'athlete_pin') { app.appendChild(buildAthletePin()); return; }
+  if (S.role === 'coach_pending') { app.appendChild(buildCoachPending()); return; }
 
   app.appendChild(buildHeader());
   const content = document.createElement('div');
@@ -2255,6 +2278,35 @@ function buildLogin() {
 // ============================================================
 // PIN
 // ============================================================
+function buildCoachPending() {
+  const d = document.createElement('div');
+  d.className = 'login-screen';
+  const card = document.createElement('div');
+  card.className = 'login-card';
+
+  const h2 = document.createElement('h2');
+  const rejected = S.coachStatus === 'rejected';
+  h2.textContent = rejected ? 'Solicitud no aprobada' : 'Cuenta en revisi\u00f3n';
+  card.appendChild(h2);
+
+  const p = document.createElement('p');
+  p.style.cssText = 'text-align:center; color:var(--text-secondary); margin-top:8px; line-height:1.5;';
+  p.textContent = rejected
+    ? 'Tu solicitud de acceso como entrenador no fue aceptada. Si crees que es un error, contacta al administrador.'
+    : 'Tu cuenta fue creada correctamente. Un administrador debe aprobarla antes de que puedas entrar. Vuelve a intentarlo m\u00e1s tarde.';
+  card.appendChild(p);
+
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-secondary';
+  btn.style.marginTop = '16px';
+  btn.textContent = 'Salir';
+  btn.onclick = () => { S.role = null; SB_ACCESS_TOKEN = null; COACH_CREDS = null; render(); };
+  card.appendChild(btn);
+
+  d.appendChild(card);
+  return d;
+}
+
 function buildPin() {
   const d = document.createElement('div');
   d.className = 'login-screen';
@@ -2263,32 +2315,42 @@ function buildPin() {
   backBtn.className = 'btn-exit';
   backBtn.textContent = '\u2190 Volver';
   backBtn.style.cssText = 'position:absolute; top:20px; left:16px; z-index:2;';
-  backBtn.onclick = () => { S.role = null; S.pinError = false; render(); };
+  backBtn.onclick = () => { S.role = null; S.pinError = false; S.pinMode = 'login'; S.signupError = null; S.signupMsg = null; render(); };
   d.appendChild(backBtn);
 
   const card = document.createElement('div');
   card.className = 'login-card';
 
+  const isSignup = S.pinMode === 'signup';
+
   const h2 = document.createElement('h2');
-  h2.textContent = 'Acceso Entrenador';
+  h2.textContent = isSignup ? 'Crear cuenta de entrenador' : 'Acceso Entrenador';
   card.appendChild(h2);
 
-  // Mismo glass que el selector de atleta, sin la flecha del desplegable
   const glassBg = 'background: linear-gradient(180deg, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0) 42%), linear-gradient(160deg, rgba(255,255,255,0.4) 0%, rgba(210,230,245,0.28) 60%, rgba(180,215,240,0.3) 100%);';
 
   const email = document.createElement('input');
   email.type = 'email'; email.placeholder = 'Email'; email.autocomplete = 'username';
   email.className = 'select-styled';
-  email.value = (S.coachEmail != null) ? S.coachEmail : COACH_EMAIL;
+  email.value = (S.coachEmail != null) ? S.coachEmail : (isSignup ? '' : COACH_EMAIL);
   email.style.cssText = glassBg;
   email.oninput = () => { S.coachEmail = email.value; };
   card.appendChild(email);
 
   const pass = document.createElement('input');
-  pass.type = 'password'; pass.placeholder = 'Contrase\u00f1a'; pass.autocomplete = 'current-password';
+  pass.type = 'password'; pass.placeholder = 'Contrase\u00f1a'; pass.autocomplete = isSignup ? 'new-password' : 'current-password';
   pass.className = 'select-styled';
   pass.style.cssText = glassBg + 'margin-top:14px;';
   card.appendChild(pass);
+
+  let pass2 = null;
+  if (isSignup) {
+    pass2 = document.createElement('input');
+    pass2.type = 'password'; pass2.placeholder = 'Repetir contrase\u00f1a'; pass2.autocomplete = 'new-password';
+    pass2.className = 'select-styled';
+    pass2.style.cssText = glassBg + 'margin-top:14px;';
+    card.appendChild(pass2);
+  }
 
   if (S.pinError) {
     const err = document.createElement('div');
@@ -2296,20 +2358,86 @@ function buildPin() {
     err.style.marginTop = '12px';
     card.appendChild(err);
   }
+  if (S.signupError) {
+    const err = document.createElement('div');
+    err.className = 'pin-error'; err.textContent = S.signupError;
+    err.style.marginTop = '12px';
+    card.appendChild(err);
+  }
+  if (S.signupMsg) {
+    const msg = document.createElement('div');
+    msg.style.cssText = 'margin-top:12px; text-align:center; color:var(--green); font-size:0.9rem;';
+    msg.textContent = S.signupMsg;
+    card.appendChild(msg);
+  }
 
-  const enter = document.createElement('button');
-  enter.className = 'btn btn-primary';
-  enter.textContent = 'Entrar';
-  enter.style.marginTop = '14px';
-  const doLogin = async () => {
-    enter.disabled = true; enter.textContent = 'Entrando\u2026';
-    const ok = await coachSignIn((email.value || '').trim(), pass.value);
-    if (ok) { S.role = 'coach'; S.tab = 0; S.pinError = false; S.coachEmail = null; render(); }
-    else { S.pinError = true; render(); }
+  // Tras login/registro OK: mira tu estado real y decide a donde vas
+  const routeAfterAuth = async () => {
+    const status = await fetchCoachStatus();
+    S.coachEmail = null;
+    if (status === 'approved') { S.role = 'coach'; S.tab = 0; }
+    else { S.role = 'coach_pending'; S.coachStatus = status; }
+    render();
   };
-  enter.onclick = doLogin;
-  pass.onkeydown = (e) => { if (e.key === 'Enter') doLogin(); };
-  card.appendChild(enter);
+
+  const submit = document.createElement('button');
+  submit.className = 'btn btn-primary';
+  submit.style.marginTop = '14px';
+
+  if (isSignup) {
+    submit.textContent = 'Crear cuenta';
+    const doSignup = async () => {
+      S.signupError = null; S.signupMsg = null;
+      const em = (email.value || '').trim();
+      if (!em || pass.value.length < 8) { S.signupError = 'Email v\u00e1lido y contrase\u00f1a de m\u00ednimo 8 caracteres.'; render(); return; }
+      if (pass.value !== pass2.value) { S.signupError = 'Las contrase\u00f1as no coinciden.'; render(); return; }
+      submit.disabled = true; submit.textContent = 'Creando\u2026';
+      try {
+        const res = await fetch(SUPABASE_URL + '/auth/v1/signup', {
+          method: 'POST',
+          headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: em, password: pass.value })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          S.signupError = (data && data.msg) ? data.msg : 'No se pudo crear la cuenta.';
+          submit.disabled = false; submit.textContent = 'Crear cuenta'; render(); return;
+        }
+        if (data.access_token) {
+          // auto-confirmado: entra ya y va directo a "en revisión"
+          SB_ACCESS_TOKEN = data.access_token;
+          COACH_CREDS = { email: em, password: pass.value };
+          await routeAfterAuth();
+        } else {
+          // requiere confirmar email antes de poder entrar
+          S.signupMsg = 'Cuenta creada. Revisa tu email para confirmarla y luego entra con tu contrase\u00f1a.';
+          S.pinMode = 'login'; S.coachEmail = em;
+          submit.disabled = false; render();
+        }
+      } catch (e) {
+        S.signupError = 'Sin conexi\u00f3n.'; submit.disabled = false; submit.textContent = 'Crear cuenta'; render();
+      }
+    };
+    submit.onclick = doSignup;
+  } else {
+    submit.textContent = 'Entrar';
+    const doLogin = async () => {
+      submit.disabled = true; submit.textContent = 'Entrando\u2026';
+      const ok = await coachSignIn((email.value || '').trim(), pass.value);
+      if (ok) { S.pinError = false; await routeAfterAuth(); }
+      else { S.pinError = true; render(); }
+    };
+    submit.onclick = doLogin;
+    pass.onkeydown = (e) => { if (e.key === 'Enter') doLogin(); };
+  }
+  card.appendChild(submit);
+
+  const toggle = document.createElement('button');
+  toggle.className = 'btn btn-secondary';
+  toggle.style.marginTop = '10px';
+  toggle.textContent = isSignup ? 'Ya tengo cuenta' : '\u00bfEres nuevo? Crear cuenta';
+  toggle.onclick = () => { S.pinMode = isSignup ? 'login' : 'signup'; S.pinError = false; S.signupError = null; S.signupMsg = null; render(); };
+  card.appendChild(toggle);
 
   d.appendChild(card);
   return d;
@@ -2464,6 +2592,84 @@ function openCoachPasswordModal() {
   setTimeout(() => p1.focus(), 50);
 }
 
+async function openCoachAdminModal() {
+  if (document.getElementById('admin-modal')) return;
+  const ov = document.createElement('div');
+  ov.id = 'admin-modal';
+  ov.style.cssText = 'position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(20,40,70,0.45); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);';
+  const card = document.createElement('div');
+  card.className = 'login-card';
+  card.style.cssText = 'max-width:440px; width:100%; max-height:80vh; overflow-y:auto;';
+  const h = document.createElement('h2'); h.textContent = 'Entrenadores'; card.appendChild(h);
+
+  const list = document.createElement('div');
+  list.style.cssText = 'margin-top:12px; display:flex; flex-direction:column; gap:10px;';
+  list.textContent = 'Cargando\u2026';
+  card.appendChild(list);
+
+  const close = document.createElement('button');
+  close.className = 'btn btn-secondary'; close.textContent = 'Cerrar'; close.style.marginTop = '14px';
+  close.onclick = () => ov.remove();
+  card.appendChild(close);
+
+  ov.appendChild(card);
+  ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+  document.body.appendChild(ov);
+
+  const loadList = async () => {
+    list.textContent = 'Cargando\u2026';
+    try {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/list_coaches_for_admin', {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json' },
+        body: '{}'
+      });
+      if (!res.ok) { list.textContent = 'No se pudo cargar la lista.'; return; }
+      const rows = await res.json();
+      list.innerHTML = '';
+      if (!rows.length) { list.textContent = 'No hay entrenadores registrados.'; return; }
+      rows.forEach(c => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; border-radius:12px; background:rgba(255,255,255,0.5); border:1px solid rgba(255,255,255,0.7);';
+
+        const info = document.createElement('div');
+        info.style.cssText = 'display:flex; flex-direction:column; min-width:0;';
+        const em = document.createElement('span'); em.style.cssText = 'font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'; em.textContent = c.email + (c.is_admin ? ' \u2b50' : '');
+        const st = document.createElement('span'); st.style.cssText = 'font-size:0.75rem; color:var(--text-secondary);';
+        st.textContent = c.status === 'approved' ? 'Aprobado' : c.status === 'rejected' ? 'Rechazado' : 'Pendiente';
+        info.appendChild(em); info.appendChild(st);
+        row.appendChild(info);
+
+        if (!c.is_admin) {
+          const actions = document.createElement('div');
+          actions.style.cssText = 'display:flex; gap:6px; flex-shrink:0;';
+          const setStatus = async (newStatus) => {
+            try {
+              const r = await fetch(SUPABASE_URL + '/rest/v1/coaches?id=eq.' + c.id, {
+                method: 'PATCH',
+                headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+                body: JSON.stringify({ status: newStatus })
+              });
+              if (r.ok) loadList(); else alert('No se pudo actualizar.');
+            } catch (e) { alert('Sin conexi\u00f3n.'); }
+          };
+          if (c.status !== 'approved') {
+            const ok = document.createElement('button'); ok.className = 'btn-exit'; ok.textContent = '\u2705';
+            ok.onclick = () => setStatus('approved'); actions.appendChild(ok);
+          }
+          if (c.status !== 'rejected') {
+            const no = document.createElement('button'); no.className = 'btn-exit'; no.textContent = '\u274c';
+            no.onclick = () => setStatus('rejected'); actions.appendChild(no);
+          }
+          row.appendChild(actions);
+        }
+        list.appendChild(row);
+      });
+    } catch (e) { list.textContent = 'Sin conexi\u00f3n.'; }
+  };
+  loadList();
+}
+
 function buildHeader() {
   const h = document.createElement('div');
   h.className = 'header';
@@ -2486,6 +2692,13 @@ function buildHeader() {
     pwBtn.title = 'Cambiar contrase\u00f1a';
     pwBtn.onclick = openCoachPasswordModal;
     right.appendChild(pwBtn);
+    if (S.isAdmin) {
+      const adminBtn = document.createElement('button');
+      adminBtn.className = 'btn-exit'; adminBtn.textContent = '👥 Coaches';
+      adminBtn.title = 'Aprobar entrenadores';
+      adminBtn.onclick = openCoachAdminModal;
+      right.appendChild(adminBtn);
+    }
   }
   const btn = document.createElement('button');
   btn.className = 'btn-exit'; btn.textContent = 'Salir';
