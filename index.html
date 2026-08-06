@@ -2686,20 +2686,7 @@ function buildHeader() {
   h.appendChild(left);
   const right = document.createElement('div');
   right.style.cssText = 'display:flex; gap:8px; align-items:center;';
-  if (S.role === 'coach') {
-    const pwBtn = document.createElement('button');
-    pwBtn.className = 'btn-exit'; pwBtn.textContent = '🔑 Clave';
-    pwBtn.title = 'Cambiar contrase\u00f1a';
-    pwBtn.onclick = openCoachPasswordModal;
-    right.appendChild(pwBtn);
-    if (S.isAdmin) {
-      const adminBtn = document.createElement('button');
-      adminBtn.className = 'btn-exit'; adminBtn.textContent = '👥 Coaches';
-      adminBtn.title = 'Aprobar entrenadores';
-      adminBtn.onclick = openCoachAdminModal;
-      right.appendChild(adminBtn);
-    }
-  }
+
   const btn = document.createElement('button');
   btn.className = 'btn-exit'; btn.textContent = 'Salir';
   btn.onclick = () => { S.role = null; S.athleteName = null; render(); };
@@ -3558,10 +3545,58 @@ function buildCalendar() {
 // ============================================================
 // COACH: EQUIPO
 // ============================================================
+function buildTeamCoachesTab() {
+  const d = document.createElement('div');
+
+  const pwCard = document.createElement('div'); pwCard.className = 'card';
+  const pwLbl = document.createElement('label'); pwLbl.className = 'field-label'; pwLbl.textContent = 'Mi cuenta';
+  pwCard.appendChild(pwLbl);
+  const pwBtn = document.createElement('button');
+  pwBtn.className = 'btn btn-secondary'; pwBtn.textContent = '\ud83d\udd11 Cambiar contrase\u00f1a';
+  pwBtn.style.width = '100%';
+  pwBtn.onclick = openCoachPasswordModal;
+  pwCard.appendChild(pwBtn);
+  d.appendChild(pwCard);
+
+  if (S.isAdmin) {
+    const adminCard = document.createElement('div'); adminCard.className = 'card'; adminCard.style.marginTop = '12px';
+    const adminLbl = document.createElement('label'); adminLbl.className = 'field-label'; adminLbl.textContent = 'Administraci\u00f3n';
+    adminCard.appendChild(adminLbl);
+    const p = document.createElement('p');
+    p.style.cssText = 'font-size:0.8rem; color:var(--text2); margin:0 0 10px;';
+    p.textContent = 'Aprueba o rechaza entrenadores que se hayan registrado.';
+    adminCard.appendChild(p);
+    const adminBtn = document.createElement('button');
+    adminBtn.className = 'btn btn-primary'; adminBtn.textContent = '\ud83d\udc65 Gesti\u00f3n de entrenadores';
+    adminBtn.style.width = '100%';
+    adminBtn.onclick = openCoachAdminModal;
+    adminCard.appendChild(adminBtn);
+    d.appendChild(adminCard);
+  }
+
+  return d;
+}
+
 function buildCoachTeam() {
   const d = document.createElement('div');
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'GESTIÓN DE EQUIPO';
   d.appendChild(st);
+
+  if (!S.teamView) S.teamView = 'nadadores';
+  const toggle = document.createElement('div');
+  toggle.style.cssText = 'display:flex;gap:8px;margin-bottom:16px';
+  const mkToggleBtn = function(label, key) {
+    const b = document.createElement('button');
+    b.textContent = label;
+    const active = S.teamView === key;
+    b.style.cssText = 'flex:1;padding:10px;border-radius:10px;font-size:0.82rem;font-weight:700;cursor:pointer;border:1px solid ' + (active ? 'var(--gold)' : 'var(--border)') + ';background:' + (active ? 'var(--gold)' : 'var(--surface)') + ';color:' + (active ? '#1a1a1a' : 'var(--text2)');
+    b.onclick = function() { S.teamView = key; render(); };
+    return b;
+  };
+  toggle.append(mkToggleBtn('Nadadores', 'nadadores'), mkToggleBtn('Entrenadores', 'entrenadores'));
+  d.appendChild(toggle);
+
+  if (S.teamView === 'entrenadores') { d.appendChild(buildTeamCoachesTab()); return d; }
 
   // Add athlete
   const addCard = document.createElement('div'); addCard.className = 'card';
