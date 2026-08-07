@@ -687,7 +687,6 @@ const SUPABASE_KEY = 'sb_publishable_Wc-Lo4L8ZPZ_OOg1F8iVVg_vWPEabtn'; // clave 
 let SB_STATUS = 'ok'; // 'ok' | 'nokey' | 'auth' | 'offline'
 
 // --- Sesión de coach (Supabase Auth) para que las policies RLS de escritura reconozcan auth.uid() ---
-const COACH_EMAIL = 'pablohschneider@gmail.com'; // solo prefill del formulario (el email no es secreto)
 let SB_ACCESS_TOKEN = null; // no restauramos token viejo al arrancar: caducaría y daría un 401 falso ("clave revocada"). El coach re-loguea por sesión.
 let LAST_AUTH_ERROR = null; // 'confirm' | 'creds'
 let COACH_CREDS = null; // {email,password} SOLO en memoria durante la sesion; nunca se guarda en disco ni se hardcodea
@@ -2495,7 +2494,7 @@ function buildPin() {
   const email = document.createElement('input');
   email.type = 'email'; email.placeholder = 'Email'; email.autocomplete = 'username';
   email.className = 'select-styled';
-  email.value = (S.coachEmail != null) ? S.coachEmail : (isSignup ? '' : COACH_EMAIL);
+  email.value = (S.coachEmail != null) ? S.coachEmail : '';
   email.style.cssText = glassBg;
   email.oninput = () => { S.coachEmail = email.value; };
   card.appendChild(email);
