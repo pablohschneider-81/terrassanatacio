@@ -801,19 +801,26 @@ async function dbGetAthletes() {
     // El coach lee los suyos por RLS (la vista respeta el aislamiento por coach_id)
     rows = await sbFetch('athletes_directory?select=id,name,morning_days,has_pin&order=name');
   } else {
-    // Nadador (o pantalla de login): la lista se obtiene con el código de equipo.
-    // Sin código no hay nombres: así no se expone el roster a cualquiera.
+    // Nadador (o pantalla de login): la lista se obtiene con el código de equipo,
+    // vía Edge Function con rate-limit por IP (antes era un RPC público sin
+    // ningún límite de intentos — fuerza-bruteable para sacar rosters de otros
+    // clubes). Sin código no hay nombres: así no se expone el roster a cualquiera.
     const code = getTeamCode();
     if (!code) { _athleteCache = []; return _athleteCache; }
     try {
-      const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/athletes_by_team_code', {
+      const res = await fetch(SUPABASE_URL + '/functions/v1/team-roster', {
         method: 'POST',
-        headers: Object.assign({ 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
-                               SB_ACCESS_TOKEN ? { 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN } : {}),
-        body: JSON.stringify({ p_code: code })
+        headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
       });
-      rows = res.ok ? await res.json() : [];
-    } catch (e) { console.error('athletes_by_team_code', e.message); rows = []; }
+      if (res.status === 429) {
+        const t = await res.json().catch(function () { return {}; });
+        S.teamCodeError = t.error || 'Demasiados intentos. Probá de nuevo en unos minutos.';
+        rows = [];
+      } else {
+        rows = res.ok ? await res.json() : [];
+      }
+    } catch (e) { console.error('team-roster', e.message); rows = []; }
   }
   _athleteCache = rows || [];
   return _athleteCache;
@@ -855,6 +862,25 @@ async function dbAddAthlete(name) {
   const res = await sbFetch('athletes', { method:'POST', body: JSON.stringify({ name }) });
   _athleteCache = null;
   return { ok: !!res, reason: res ? 'created' : 'error' };
+}
+async function dbUpdateAthleteMeta(id, fields) {
+  // fields: { birth_date, consent_on_file, consent_note } — datos de menor de edad
+  // y consentimiento parental (documentado en papel por el club/federación, NO
+  // capturado digitalmente por Ondrift).
+  const res = await sbFetch('athletes?id=eq.' + id, { method:'PATCH', body: JSON.stringify(fields) });
+  _athleteCache = null;
+  return Array.isArray(res) && res.length > 0;
+}
+async function dbEraseAthlete(id) {
+  // Borrado RGPD real y definitivo (derecho de supresión, Art. 17). Distinto de
+  // dbDeleteAthlete ("dar de baja": soft, conserva historial para bajas normales
+  // de temporada). Este SÍ borra la fila; cascada a rpe_entries, wellness_entries,
+  // strength_sets, bodyweight_entries, comments, inscriptions, results y
+  // attendance (todas con ON DELETE CASCADE). NO reversible — usar solo ante un
+  // pedido expreso de supresión de datos.
+  const res = await sbFetch('athletes?id=eq.' + id, { method:'DELETE' });
+  _athleteCache = null;
+  return Array.isArray(res) && res.length > 0;
 }
 async function dbDeleteAthlete(name) {
   // Soft-delete: pone active=false en vez de borrar la fila.
@@ -1025,7 +1051,7 @@ async function dbSaveAttendanceBulk(sessionId, statusByAthleteId) {
     prefer: 'resolution=merge-duplicates,return=representation',
     body: JSON.stringify(body)
   });
-  delete _attendancePctCache; // invalida cache de % del mes, se recalcula al próximo pedido
+  _attendancePctCache = null; // invalida cache de % del mes, se recalcula al próximo pedido
   return res;
 }
 let _attendancePctCache = null;
@@ -1295,6 +1321,16 @@ function showToast(msg, type) {
   }, 2200);
 }
 
+function athleteAge(birthDate) {
+  if (!birthDate) return null;
+  const b = new Date(birthDate + 'T00:00:00');
+  if (isNaN(b)) return null;
+  const t = new Date();
+  let age = t.getFullYear() - b.getFullYear();
+  const m = t.getMonth() - b.getMonth();
+  if (m < 0 || (m === 0 && t.getDate() < b.getDate())) age--;
+  return age;
+}
 function showConfirm(title, message, onConfirm, opts) {
   opts = opts || {};
   const back = document.createElement('div');
@@ -1324,13 +1360,6 @@ function showConfirm(title, message, onConfirm, opts) {
 // ============================================================
 // STATE
 // ============================================================
-const DEFAULT_ATHLETES = [
-  'DIAZ QUERALT','DÍDAC CASTRO','LOBO VICTOR','MAURICIO AGUDELO','ORTEGA IKER',
-  'QUIÑONERO MARTINA','CANO JAN','CAPITÀ DAMIAN','COBO ABRIL','GOMEZ NATALIA',
-  'GUILLEM GÁLVEZ','MARQUEZ XABI','OSUNA DANIELA','RIERA MARIO','RODRIGUEZ ADRIANA',
-  'SANTANA POL','GALLARDO ITZIAR','ORDOÑEZ JULIA','MARC ESCRIBA','BRASILEÑO (pendiente)'
-];
-
 const PHASES = ['Ligero','Desarrollo','Impacto','Fuerza','Recuperación','Tapper','Transición'];
 const ALPHA_PHASES = ['Neural Prime','Force Integration','Pattern Transfer','AlphaReload'];
 const COMP_TYPES = ['Regional','Autonómico','Nacional','Internacional','Otros'];
@@ -1393,7 +1422,6 @@ let S = {
   histMonth: null,
   // athlete
   ath_tab: 0,
-  editingPB: null,
   rpeSelected: null,
   fatigueSelected: null,
   rpeNote: '',
@@ -1476,7 +1504,6 @@ window.addEventListener('online', flushRPEQueue);
 // ============================================================
 const DATA = {
   athletes: [],
-  pbs: {},
   sessions: {}, // date -> {am,pm}
   allSessions: [],
   rpe: {},      // date -> {athleteName: {am,pm}}
@@ -1490,6 +1517,41 @@ const DATA = {
   athleteWellHist: {}, // name -> [{date,sleep,soreness,fatigue,stress}]
   pendingSurvey: {} // name -> competición pendiente de encuesta post-carrera (o null)
 };
+
+// Cierra sesión limpiando TODO el estado de datos, para que el siguiente login
+// (otro coach/atleta en el mismo dispositivo) no pinte la caché del anterior.
+function resetSession() {
+  SB_ACCESS_TOKEN = null;
+  COACH_CREDS = null;
+  try { localStorage.removeItem('ondrift_sb_token'); } catch (e) {}
+  // Caché de datos
+  DATA.athletes = []; DATA.sessions = {}; DATA.allSessions = [];
+  DATA.rpe = {}; DATA.comments = {}; DATA.competitions = []; DATA.events = [];
+  DATA.inscriptions = []; DATA.athleteHist = {}; DATA.allHistLoaded = false;
+  DATA.wellness = {}; DATA.athleteWellHist = {}; DATA.pendingSurvey = {};
+  DATA.strengthEx = undefined; DATA.coachStrAthletes = undefined;
+  DATA.coachStrLatest = undefined; DATA.coachStrBw = undefined;
+  // Cachés de módulo
+  _allSessionsCache = null; _loadedMonths = {};
+  _rpeCache = {}; _rpeRangeLoaded = false;
+  // Estado de auth/UI. NO se toca S.teamCode: es el emparejamiento del
+  // dispositivo del nadador, con su propia opción "Cambiar de equipo".
+  S.role = null; S.athleteName = null; S.isAdmin = false;
+  S.showCoachAdmin = false; S.coachList = null; S.myTeamCode = null;
+  S.coachStatus = null; S.coachEmail = null;
+  S.tab = 0; S.ath_tab = 0;
+  S._cstrLoading = false; S._strLoading = false;
+}
+
+// Escapa texto de usuario antes de insertarlo en innerHTML (previene XSS
+// almacenado vía nombre de atleta autorregistrado, nota de RPE, o nombre
+// de competición). Usar SIEMPRE que un valor no-literal entre en innerHTML.
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
 
 // Sync accessors (read from cache)
 function getAthletes() { return DATA.athletes.map(a => a.name); }
@@ -2304,10 +2366,11 @@ function buildLogin() {
       if (v.length < 4) { S.teamCodeError = 'Escribe el código completo.'; render(); return; }
       goCode.disabled = true; goCode.textContent = 'Comprobando…';
       setTeamCode(v);
+      S.teamCodeError = null;
       const list = await dbGetAthletes();
       if (!list.length) {
         setTeamCode(null);
-        S.teamCodeError = 'Código no válido o equipo sin nadadores.';
+        if (!S.teamCodeError) S.teamCodeError = 'Código no válido o equipo sin nadadores.';
         render(); return;
       }
       DATA.athletes = list; S.teamCodeError = null; render();
@@ -2400,7 +2463,7 @@ function buildCoachPending() {
   btn.className = 'btn btn-secondary';
   btn.style.marginTop = '16px';
   btn.textContent = 'Salir';
-  btn.onclick = () => { S.role = null; SB_ACCESS_TOKEN = null; COACH_CREDS = null; render(); };
+  btn.onclick = () => { resetSession(); render(); };
   card.appendChild(btn);
 
   d.appendChild(card);
@@ -2478,9 +2541,8 @@ function buildPin() {
   const routeAfterAuth = async () => {
     const status = await fetchCoachStatus();
     S.coachEmail = null;
-    if (status === 'approved') { S.role = 'coach'; S.tab = 0; }
-    else { S.role = 'coach_pending'; S.coachStatus = status; }
-    render();
+    if (status === 'approved') { S.role = 'coach'; S.tab = 0; renderAsync(); }
+    else { S.role = 'coach_pending'; S.coachStatus = status; render(); }
   };
 
   const submit = document.createElement('button');
@@ -2792,7 +2854,7 @@ function buildHeader() {
 
   const btn = document.createElement('button');
   btn.className = 'btn-exit'; btn.textContent = 'Salir';
-  btn.onclick = () => { S.role = null; S.athleteName = null; render(); };
+  btn.onclick = () => { resetSession(); render(); };
   right.appendChild(btn);
   h.appendChild(right);
   return h;
@@ -3172,14 +3234,14 @@ function buildCoachRPE() {
       const deltaStr = delta > 0 ? '+'+delta : delta < 0 ? ''+delta : '=';
       const dClass = deltaCount > 0 ? deltaClass(delta) : '';
       tr.innerHTML = `
-        <td>${nameShort}</td>
+        <td>${escapeHtml(nameShort)}</td>
         <td>${circles}</td>
         <td><span class="fatigue-label" style="background:${fat.color}22;color:${fat.color}">${fat.label}</span></td>
         <td><span class="delta ${dClass}">${deltaStr}</span></td>
-        <td><button class="comment-btn" data-ath="${name}">${getComments()[today+'_'+name] ? '💬' : '✏️'}</button></td>
+        <td><button class="comment-btn" data-ath="${escapeHtml(name)}">${getComments()[today+'_'+name] ? '💬' : '✏️'}</button></td>
       `;
     } else {
-      tr.innerHTML = '<td>' + nameShort + '</td><td colspan="2" style="color:var(--text2);font-size:0.8rem">Sin respuesta</td><td></td><td><button class="comment-btn" data-ath="' + name + '">✏️</button></td>';
+      tr.innerHTML = '<td>' + escapeHtml(nameShort) + '</td><td colspan="2" style="color:var(--text2);font-size:0.8rem">Sin respuesta</td><td></td><td><button class="comment-btn" data-ath="' + escapeHtml(name) + '">✏️</button></td>';
     }
     tbody.appendChild(tr);
   });
@@ -3267,10 +3329,10 @@ function buildCoachRPE() {
             const deltaStr = delta > 0 ? '+'+delta : delta < 0 ? ''+delta : '=';
             const dClass2 = dc2 > 0 ? deltaClass(delta) : '';
             const hasComment = !!getComments()[s.date+'_'+name];
-            const noteHtml = lastE.note ? '<div style=\"font-size:0.7rem;color:var(--text2);font-style:italic\">\"' + lastE.note + '\"</div>' : '';
-            tr.innerHTML = '<td>' + ns + noteHtml + '</td><td>' + circles + '</td><td><span class=\"fatigue-label\" style=\"background:' + fat.color + '22;color:' + fat.color + ';font-size:0.7rem\">' + fat.label + '</span></td><td><span class=\"delta ' + dClass2 + '\">' + deltaStr + '</span></td><td><button class=\"comment-btn\" data-ath=\"' + name + '\" data-date=\"' + s.date + '\">' + (hasComment ? '\ud83d\udcac' : '\u270f\ufe0f') + '</button></td>';
+            const noteHtml = lastE.note ? '<div style=\"font-size:0.7rem;color:var(--text2);font-style:italic\">\"' + escapeHtml(lastE.note) + '\"</div>' : '';
+            tr.innerHTML = '<td>' + escapeHtml(ns) + noteHtml + '</td><td>' + circles + '</td><td><span class=\"fatigue-label\" style=\"background:' + fat.color + '22;color:' + fat.color + ';font-size:0.7rem\">' + fat.label + '</span></td><td><span class=\"delta ' + dClass2 + '\">' + deltaStr + '</span></td><td><button class=\"comment-btn\" data-ath=\"' + escapeHtml(name) + '\" data-date=\"' + s.date + '\">' + (hasComment ? '\ud83d\udcac' : '\u270f\ufe0f') + '</button></td>';
           } else {
-            tr.innerHTML = '<td>' + ns + '</td><td colspan=\"3\" style=\"color:var(--text2);font-size:0.78rem\">Sin respuesta</td><td></td>';
+            tr.innerHTML = '<td>' + escapeHtml(ns) + '</td><td colspan=\"3\" style=\"color:var(--text2);font-size:0.78rem\">Sin respuesta</td><td></td>';
           }
           tbodyH.appendChild(tr);
         });
@@ -3351,7 +3413,7 @@ function buildCoachSquad() {
     adherence.filter(function(a){ return a.missing.length > 0; }).forEach(function(a, i) {
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:9px 14px;' + (i > 0 ? 'border-top:1px solid rgba(100,140,180,0.12)' : '');
-      row.innerHTML = '<span style="font-size:0.85rem;font-weight:600;color:#1a2a3a">' + a.name + '</span>' +
+      row.innerHTML = '<span style="font-size:0.85rem;font-weight:600;color:#1a2a3a">' + escapeHtml(a.name) + '</span>' +
         '<span style="font-size:0.68rem;font-weight:700;color:#c0392b">' + a.missing.join(' · ') + '</span>';
       adhCard.appendChild(row);
     });
@@ -3418,7 +3480,7 @@ function buildCoachSquad() {
     card.className = 'acwr-card';
     card.style.borderColor = x.info.color + '55';
     card.title = estMark ? 'Incluye sesión sin duración real registrada (estimada en 80 min)' : '';
-    card.innerHTML = '<div class="acwr-name">' + x.name.split(' ')[0] + '</div>'
+    card.innerHTML = '<div class="acwr-name">' + escapeHtml(x.name.split(' ')[0]) + '</div>'
       + '<div class="acwr-val" style="color:' + x.info.color + '">' + val + '</div>'
       + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + (isCal ? 'Provisional' : x.info.label) + '</div>'
       + '<div style="font-size:0.6rem;color:#7a9ab8;margin-top:4px;border-top:1px solid rgba(100,140,180,0.15);padding-top:4px">' + rpeStr + '</div>'
@@ -3559,7 +3621,7 @@ function buildCalendar() {
       ci.innerHTML =
         '<div style="display:flex;align-items:stretch;gap:0">'
         + '<div style="flex:1;min-width:0">'
-        + '<div class="comp-name">' + c.name + '</div>'
+        + '<div class="comp-name">' + escapeHtml(c.name) + '</div>'
         + '<div class="comp-sub">' + formatDateLabel(c.start) + ' → ' + formatDateLabel(c.end) + '</div>'
         + (c.location ? '<div class="comp-sub" style="margin-top:2px">' + c.location + '</div>' : '')
         + '<div style="margin-top:8px;display:flex;align-items:center;gap:8px">'
@@ -3751,6 +3813,24 @@ function buildCoachTeam() {
       warn.style.cssText = 'color:#f39c12;font-size:0.7rem;font-weight:600;margin-left:6px';
       n.appendChild(warn);
     }
+    const age = athlete ? athleteAge(athlete.birth_date) : null;
+    const isMinor = age !== null && age < 18;
+    if (athlete && !athlete.birth_date) {
+      const warn = document.createElement('span');
+      warn.textContent = ' ⚠️ sin fecha de nacimiento';
+      warn.style.cssText = 'color:#f39c12;font-size:0.7rem;font-weight:600;margin-left:6px';
+      n.appendChild(warn);
+    } else if (isMinor && !athlete.consent_on_file) {
+      const warn = document.createElement('span');
+      warn.textContent = ' ⚠️ menor sin consentimiento registrado';
+      warn.style.cssText = 'color:#e74c3c;font-size:0.7rem;font-weight:600;margin-left:6px';
+      n.appendChild(warn);
+    } else if (isMinor) {
+      const badge = document.createElement('span');
+      badge.textContent = ' 🛡️ menor · consentimiento OK';
+      badge.style.cssText = 'color:#27ae60;font-size:0.7rem;font-weight:600;margin-left:6px';
+      n.appendChild(badge);
+    }
     const pinBtn = document.createElement('button'); pinBtn.className = 'btn-del'; pinBtn.textContent = '🔑 PIN';
     pinBtn.style.cssText = 'background:transparent;color:var(--text2);border:1px solid rgba(255,255,255,0.15);font-size:0.7rem;padding:4px 8px;margin-right:6px';
     pinBtn.onclick = function() {
@@ -3769,15 +3849,67 @@ function buildCoachTeam() {
         }
       });
     };
+    const metaBtn = document.createElement('button'); metaBtn.className = 'btn-del'; metaBtn.textContent = '📅';
+    metaBtn.title = 'Fecha de nacimiento / consentimiento';
+    metaBtn.style.cssText = 'background:transparent;color:var(--text2);border:1px solid rgba(255,255,255,0.15);font-size:0.7rem;padding:4px 8px;margin-right:6px';
+    metaBtn.onclick = function() {
+      S.editingAthleteMeta = (S.editingAthleteMeta === (athlete && athlete.id)) ? null : (athlete && athlete.id);
+      render();
+    };
     const del = document.createElement('button'); del.className = 'btn-del'; del.textContent = '✕';
+    del.title = 'Dar de baja (conserva historial)';
     del.onclick = function() {
       dbDeleteAthlete(name).then(function(ok) {
         if (!ok) { showConfirm('No se pudo eliminar', 'Hubo un error de conexión con la base de datos. Revisá tu internet e intentá de nuevo.', function(){}); return; }
         renderAsync();
       });
     };
-    item.append(n, pinBtn, del);
+    const erase = document.createElement('button'); erase.className = 'btn-del'; erase.textContent = '🗑️';
+    erase.title = 'Eliminar definitivamente (RGPD)';
+    erase.style.cssText = 'background:transparent;color:#e74c3c;border:1px solid rgba(231,76,60,0.35);font-size:0.7rem;padding:4px 8px;margin-right:6px';
+    erase.onclick = function() {
+      if (!athlete) return;
+      showConfirm(
+        '⚠️ Eliminar ' + name + ' definitivamente',
+        'Esto borra el nombre y TODO su historial (RPE, bienestar, fuerza, asistencia, resultados, comentarios) de forma permanente e irreversible. Usar solo ante un pedido expreso de supresión de datos (RGPD). Para bajas normales de temporada usá "✕ Dar de baja" en su lugar.',
+        function() {
+          dbEraseAthlete(athlete.id).then(function(ok) {
+            if (!ok) { showConfirm('No se pudo eliminar', 'Hubo un error de conexión con la base de datos. Revisá tu internet e intentá de nuevo.', function(){}); return; }
+            renderAsync();
+          });
+        },
+        { okText: 'Eliminar todo', cancelText: 'Cancelar' }
+      );
+    };
+    item.append(n, pinBtn, metaBtn, del, erase);
     d.appendChild(item);
+
+    if (athlete && S.editingAthleteMeta === athlete.id) {
+      const wrap = document.createElement('div'); wrap.className = 'card'; wrap.style.cssText = 'padding:12px 14px;margin:6px 0 10px';
+      const lbl1 = document.createElement('div'); lbl1.className = 'field-label'; lbl1.textContent = 'FECHA DE NACIMIENTO';
+      const inpDate = document.createElement('input'); inpDate.type = 'date'; inpDate.value = athlete.birth_date || '';
+      inpDate.style.cssText = 'width:100%;box-sizing:border-box;margin-top:4px';
+      const consentRow = document.createElement('label'); consentRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:12px;font-size:0.82rem;color:var(--text2);cursor:pointer';
+      const inpConsent = document.createElement('input'); inpConsent.type = 'checkbox'; inpConsent.checked = !!athlete.consent_on_file;
+      consentRow.append(inpConsent, document.createTextNode('Consentimiento parental en papel (ficha club/federación)'));
+      const lbl2 = document.createElement('div'); lbl2.className = 'field-label'; lbl2.style.marginTop = '10px'; lbl2.textContent = 'NOTA (opcional, ej: "Ficha federativa 2025-26")';
+      const inpNote = document.createElement('input'); inpNote.type = 'text'; inpNote.value = athlete.consent_note || ''; inpNote.placeholder = 'Referencia del documento en papel';
+      inpNote.style.cssText = 'width:100%;box-sizing:border-box;margin-top:4px';
+      const savBtn = document.createElement('button'); savBtn.className = 'btn btn-primary btn-sm'; savBtn.style.marginTop = '12px'; savBtn.textContent = 'Guardar';
+      savBtn.onclick = function() {
+        dbUpdateAthleteMeta(athlete.id, {
+          birth_date: inpDate.value || null,
+          consent_on_file: inpConsent.checked,
+          consent_note: inpNote.value.trim() || null
+        }).then(function(ok) {
+          if (!ok) { showConfirm('No se pudo guardar', 'Hubo un error de conexión. Intentá de nuevo.', function(){}); return; }
+          S.editingAthleteMeta = null;
+          renderAsync();
+        });
+      };
+      wrap.append(lbl1, inpDate, consentRow, lbl2, inpNote, savBtn);
+      d.appendChild(wrap);
+    }
   });
   return d;
 }
@@ -4143,7 +4275,7 @@ function buildHistorialEncuestas() {
     const card = document.createElement('div'); card.className = 'card';
     card.style.cssText = 'padding:14px 16px;margin-bottom:10px;border-left:3px solid ' + compColor(c.type);
     card.innerHTML =
-      '<div style="font-weight:700;font-size:0.92rem;color:var(--text)">' + c.name + '</div>'
+      '<div style="font-weight:700;font-size:0.92rem;color:var(--text)">' + escapeHtml(c.name) + '</div>'
       + '<div style="font-size:0.78rem;color:var(--text2);margin:2px 0 8px">' + formatDateLabel(c.start) + ' → ' + formatDateLabel(c.end) + '</div>'
       + '<span class="comp-badge" style="background:' + compColor(c.type) + ';color:' + contrastText(compColor(c.type)) + '">' + c.type + '</span>';
     const viewBtn = document.createElement('button');
@@ -4382,17 +4514,17 @@ function buildAthleteInicio() {
       const complete = myCount >= maxEv, hasAny = myCount > 0;
       if (complete || hasAny) {
         banner.style.cssText = 'background:rgba(30,132,73,0.1);border:1px solid rgba(30,132,73,0.4);border-radius:14px;padding:14px 16px;margin-bottom:12px';
-        banner.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:#1e8449;text-transform:uppercase;margin-bottom:6px">' + (complete?'✓ INSCRIPCIÓN COMPLETA':'⚡ INSCRIPCIÓN EN CURSO') + '</div><div style="font-weight:700;font-size:0.95rem;color:#1a2a3a">' + c.name + '</div><div style="font-size:0.8rem;color:#4a6a8a;margin-top:4px">' + myCount + ' de ' + maxEv + ' pruebas' + (daysToClose!==null&&daysToClose>=0?' · Cierra en '+daysToClose+' día'+(daysToClose!==1?'s':''):'') + '</div>';
+        banner.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:#1e8449;text-transform:uppercase;margin-bottom:6px">' + (complete?'✓ INSCRIPCIÓN COMPLETA':'⚡ INSCRIPCIÓN EN CURSO') + '</div><div style="font-weight:700;font-size:0.95rem;color:#1a2a3a">' + escapeHtml(c.name) + '</div><div style="font-size:0.8rem;color:#4a6a8a;margin-top:4px">' + myCount + ' de ' + maxEv + ' pruebas' + (daysToClose!==null&&daysToClose>=0?' · Cierra en '+daysToClose+' día'+(daysToClose!==1?'s':''):'') + '</div>';
         if (!complete) { const gb=document.createElement('button'); gb.style.cssText='margin-top:10px;width:100%;padding:10px;border-radius:10px;border:1px solid rgba(30,132,73,0.5);background:rgba(30,132,73,0.12);color:#1e8449;font-weight:700;font-size:0.88rem;cursor:pointer'; gb.textContent='Completar inscripción →'; gb.onclick=function(){S.ath_tab=3;S.inscCompId=c.id;render();}; banner.appendChild(gb); }
       } else {
         banner.style.cssText = 'background:rgba(192,57,43,0.08);border:1px solid rgba(192,57,43,0.35);border-radius:14px;padding:14px 16px;margin-bottom:12px';
-        banner.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:#c0392b;text-transform:uppercase;margin-bottom:6px">🏆 INSCRIPCIÓN ABIERTA</div><div style="font-weight:700;font-size:0.95rem;color:#1a2a3a">' + c.name + '</div><div style="font-size:0.8rem;color:#4a6a8a;margin-top:4px">' + (daysToClose!==null&&daysToClose>=0?'Cierra en '+daysToClose+' día'+(daysToClose!==1?'s':'')+' · ':'') + 'Máx. ' + maxEv + ' pruebas</div>';
+        banner.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:#c0392b;text-transform:uppercase;margin-bottom:6px">🏆 INSCRIPCIÓN ABIERTA</div><div style="font-weight:700;font-size:0.95rem;color:#1a2a3a">' + escapeHtml(c.name) + '</div><div style="font-size:0.8rem;color:#4a6a8a;margin-top:4px">' + (daysToClose!==null&&daysToClose>=0?'Cierra en '+daysToClose+' día'+(daysToClose!==1?'s':'')+' · ':'') + 'Máx. ' + maxEv + ' pruebas</div>';
         const gb=document.createElement('button'); gb.style.cssText='margin-top:10px;width:100%;padding:11px;border-radius:10px;border:none;background:linear-gradient(135deg,#c0392b,#e74c3c);color:#fff;font-weight:800;font-size:0.92rem;cursor:pointer'; gb.textContent='Inscribirme →'; gb.onclick=function(){S.ath_tab=3;S.inscCompId=c.id;render();}; banner.appendChild(gb);
       }
     } else {
       const label = diffDays===0?'¡HOY!':diffDays===1?'¡MAÑANA!':'En '+diffDays+' días';
       banner.className='alert-comp';
-      banner.innerHTML='<div class="alert-comp-lbl">🏆 COMPETICIÓN PRÓXIMA</div><div style="font-weight:700;color:#1a2a3a">'+c.name+'</div><div style="font-size:0.85rem;color:#c0392b;font-weight:700;margin-top:4px">'+label+'</div>';
+      banner.innerHTML='<div class="alert-comp-lbl">🏆 COMPETICIÓN PRÓXIMA</div><div style="font-weight:700;color:#1a2a3a">'+escapeHtml(c.name)+'</div><div style="font-size:0.85rem;color:#c0392b;font-weight:700;margin-top:4px">'+label+'</div>';
     }
     d.appendChild(banner);
   });
@@ -4940,7 +5072,7 @@ function buildResultForm(comp) {
     }).join('');
   }
 
-  wrap.innerHTML = '<div style="font-size:0.78rem;font-weight:700;color:var(--gold);margin-bottom:10px">' + comp.name + ' — ' + comp.type + '</div>'
+  wrap.innerHTML = '<div style="font-size:0.78rem;font-weight:700;color:var(--gold);margin-bottom:10px">' + escapeHtml(comp.name) + ' — ' + escapeHtml(comp.type) + '</div>'
     + field('Prueba (ej. 100m Crol)', '<input id="rf-prueba" type="text" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="100m Crol">')
     + field('Tiempo', '<input id="rf-tiempo" type="text" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="1:02.45">')
     + field('¿Cómo calificarías tu rendimiento? (1-10)', '<input id="rf-rend" type="number" min="1" max="10" value="' + f.rendimiento_pct + '" style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)">')
@@ -4977,165 +5109,6 @@ function buildResultForm(comp) {
     });
   };
   return wrap;
-}
-
-function buildAthleteStats() {
-  const d = document.createElement('div');
-  // Si no hay historia cargada, la pedimos y re-renderizamos
-  if (!DATA.athleteHist[S.athleteName]) {
-    dbGetAthleteHist(S.athleteName).then(function(h) {
-      DATA.athleteHist[S.athleteName] = h;
-      render();
-    });
-    d.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;padding:40px;color:var(--text2);gap:10px"><span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Cargando estadísticas…</div>';
-    return d;
-  }
-  // Encuesta post-competición pendiente (Nacional/Autonómico/Internacional, 5+ días después)
-  if (DATA.pendingSurvey[S.athleteName] === undefined) {
-    dbGetPendingSurvey(S.athleteName).then(function(c) {
-      DATA.pendingSurvey[S.athleteName] = c;
-      render();
-    }).catch(function(e) {
-      console.error('Error consultando encuesta pendiente', e);
-      DATA.pendingSurvey[S.athleteName] = null; // evita reintentos infinitos; se puede forzar recheck cambiando de vista
-    });
-  } else {
-    const pend = DATA.pendingSurvey[S.athleteName];
-    if (pend && S.resultFormCompId !== pend.id) {
-      const banner = document.createElement('div'); banner.className = 'card';
-      banner.style.cssText = 'padding:14px 16px;margin-bottom:14px;border:1px solid var(--gold);background:rgba(255,184,48,0.08)';
-      banner.innerHTML = '<div style="font-size:0.78rem;font-weight:700;color:var(--gold);margin-bottom:4px">📋 Encuesta pendiente</div>'
-        + '<div style="font-size:0.85rem;color:var(--text);margin-bottom:10px">' + pend.name + ' (' + pend.type + ') — contanos cómo te fue</div>'
-        + '<button id="btn-open-result-form" style="font-size:0.8rem;padding:8px 14px;border-radius:8px;border:none;background:var(--gold);color:#1a1a1a;font-weight:700;cursor:pointer">Completar</button>';
-      d.appendChild(banner);
-      banner.querySelector('#btn-open-result-form').onclick = function() { S.resultFormCompId = pend.id; render(); };
-    } else if (pend && S.resultFormCompId === pend.id) {
-      d.appendChild(buildResultForm(pend));
-    }
-  }
-  const hist = DATA.athleteHist[S.athleteName] || [];
-
-  // ── Stat pills ──
-  const avgRPE = hist.length > 0 ? (hist.reduce((s,h)=>s+h.rpe,0)/hist.length).toFixed(1) : '—';
-  const avgFatNum = hist.length > 0 ? hist.reduce((s,h)=>s+h.fatigue,0)/hist.length : null;
-  const avgFat = avgFatNum !== null ? (FATIGUE.find(function(f){ return f.v === Math.round(avgFatNum); }) || FATIGUE[2]).label : '—';
-  const avgFatColor = avgFatNum !== null ? (FATIGUE.find(function(f){ return f.v === Math.round(avgFatNum); }) || FATIGUE[2]).color : 'var(--text2)';
-
-  const sr = document.createElement('div'); sr.className = 'stat-row';
-  [{val:hist.length,lbl:'Sesiones',color:null},{val:avgRPE,lbl:'RPE Medio',color:avgRPE!=='—'?rpeColor(parseFloat(avgRPE)):null},{val:avgFat,lbl:'Fatiga Media',color:avgFatColor}].forEach(item => {
-    const b = document.createElement('div'); b.className='stat-box';
-    b.innerHTML=`<div class="stat-val" style="${item.color?'color:'+item.color:''}">${item.val}</div><div class="stat-lbl">${item.lbl}</div>`;
-    sr.appendChild(b);
-  });
-  d.appendChild(sr);
-
-  // ── Gráfico RPE ──
-  const last14 = hist.slice(-14);
-  if (last14.length > 1) {
-    const st2 = document.createElement('div'); st2.className='section-title'; st2.style.marginTop='20px'; st2.textContent='ÚLTIMAS 14 SESIONES — RPE';
-    d.appendChild(st2);
-    d.appendChild(buildRPEChart(last14));
-  }
-
-  // ── Gráfico ACWR ──
-  if (hist.length >= 3) {
-    const st3 = document.createElement('div'); st3.className='section-title'; st3.style.marginTop='20px'; st3.textContent='CARGA AGUDA:CRÓNICA (ACWR)';
-    d.appendChild(st3);
-    d.appendChild(buildACWRChart(hist));
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:0.72rem;color:var(--text2);margin-top:4px;padding:0 2px';
-    note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5' + (acwrHasEstimated(S.athleteName) ? ' · * incluye sesión sin duración real registrada (estimada en 80 min)' : '');
-    d.appendChild(note);
-
-    // ── Monotonía / Strain (Foster) ──
-    const ms = calcMonotonyStrain(S.athleteName);
-    if (ms) {
-      const mLbl = monotonyLabel(ms.monotony);
-      const mVal = ms.flatWeek ? '∞ (semana sin variación)' : ms.monotony;
-      const monoCard = document.createElement('div'); monoCard.className = 'card'; monoCard.style.cssText = 'padding:12px 14px;margin-top:10px';
-      monoCard.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:1.5px;color:' + mLbl.color + ';text-transform:uppercase;margin-bottom:4px">MONOTONÍA SEMANAL</div>'
-        + '<div style="display:flex;align-items:baseline;gap:10px">'
-        + '<div style="font-size:1.3rem;font-weight:800;color:' + mLbl.color + '">' + mVal + '</div>'
-        + '<div style="font-size:0.82rem;color:' + mLbl.color + '">' + mLbl.label + '</div>'
-        + '</div>'
-        + '<div style="font-size:0.72rem;color:var(--text2);margin-top:4px">Strain: ' + (ms.strain !== null ? ms.strain : '—') + ' · Carga semanal: ' + ms.weeklyLoad + '</div>'
-        + '<div style="font-size:0.68rem;color:var(--text2);margin-top:4px">Mide qué tan parecidos son tus días de carga esta semana. Una semana sin variación puede ser de riesgo aunque el ACWR salga óptimo.</div>';
-      d.appendChild(monoCard);
-    }
-  }
-
-  // ── Marcas personales ──
-  const stM = document.createElement('div'); stM.className='section-title'; stM.style.marginTop='24px'; stM.textContent='MARCAS PERSONALES';
-  d.appendChild(stM);
-
-  // Mejor tiempo 100m CR
-  const pb100Key = 'pb_100cr_' + S.athleteName;
-  const pb100 = DATA.pbs && DATA.pbs[pb100Key] ? DATA.pbs[pb100Key] : null;
-
-  const card100 = document.createElement('div'); card100.className='card'; card100.style.cssText='padding:14px 16px;margin-bottom:10px';
-  card100.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--accent2);text-transform:uppercase;margin-bottom:6px">🏅 100m CROL</div>' +
-    '<div style="display:flex;align-items:center;justify-content:space-between">' +
-    '<div style="font-size:1.6rem;font-weight:800;color:var(--text)">' + (pb100 || '—') + '</div>' +
-    '<button id="btn-edit-100cr" style="font-size:0.78rem;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.05);color:var(--text2);cursor:pointer">✏️ Editar</button>' +
-    '</div>';
-  d.appendChild(card100);
-
-  // Mejor prueba (estilo libre preferida)
-  const pbBestKey = 'pb_best_' + S.athleteName;
-  const pbBestData = DATA.pbs && DATA.pbs[pbBestKey] ? DATA.pbs[pbBestKey] : null;
-  const pbBestTime = DATA.pbs && DATA.pbs[pbBestKey + '_time'] ? DATA.pbs[pbBestKey + '_time'] : null;
-
-  const cardBest = document.createElement('div'); cardBest.className='card'; cardBest.style.cssText='padding:14px 16px;margin-bottom:10px';
-  cardBest.innerHTML = '<div style="font-size:0.68rem;font-weight:800;letter-spacing:2px;color:var(--gold);text-transform:uppercase;margin-bottom:6px">🥇 MEJOR PRUEBA</div>' +
-    '<div style="display:flex;align-items:center;justify-content:space-between">' +
-    '<div><div style="font-size:0.9rem;color:var(--text2);margin-bottom:2px">' + (pbBestData || 'Sin configurar') + '</div><div style="font-size:1.4rem;font-weight:800;color:var(--text)">' + (pbBestTime || '—') + '</div></div>' +
-    '<button id="btn-edit-best" style="font-size:0.78rem;padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,0.05);color:var(--text2);cursor:pointer">✏️ Editar</button>' +
-    '</div>';
-  d.appendChild(cardBest);
-
-  // Inputs inline para editar marcas
-  if (S.editingPB === '100cr') {
-    const wrap = document.createElement('div'); wrap.className='card'; wrap.style.cssText='padding:14px 16px;margin-bottom:10px';
-    wrap.innerHTML = '<div class="field-label">TIEMPO 100m CROL (ej: 1:02.45)</div>';
-    const inp = document.createElement('input'); inp.type='text'; inp.placeholder='1:02.45'; inp.value=pb100||'';
-    inp.style.cssText='width:100%;box-sizing:border-box;margin-top:4px';
-    const savBtn = document.createElement('button'); savBtn.className='btn btn-primary'; savBtn.style.marginTop='10px'; savBtn.textContent='Guardar';
-    savBtn.onclick = function() {
-      if (!DATA.pbs) DATA.pbs = {};
-      DATA.pbs[pb100Key] = inp.value.trim();
-      S.editingPB = null;
-      render();
-    };
-    wrap.appendChild(inp); wrap.appendChild(savBtn);
-    d.appendChild(wrap);
-  }
-  if (S.editingPB === 'best') {
-    const wrap = document.createElement('div'); wrap.className='card'; wrap.style.cssText='padding:14px 16px;margin-bottom:10px';
-    wrap.innerHTML = '<div class="field-label">PRUEBA (ej: 200m Libre)</div>';
-    const inpPrueba = document.createElement('input'); inpPrueba.type='text'; inpPrueba.placeholder='200m Libre'; inpPrueba.value=pbBestData||'';
-    inpPrueba.style.cssText='width:100%;box-sizing:border-box;margin-top:4px';
-    const inpTime = document.createElement('input'); inpTime.type='text'; inpTime.placeholder='2:05.33'; inpTime.value=pbBestTime||'';
-    const lblT = document.createElement('div'); lblT.className='field-label'; lblT.style.marginTop='10px'; lblT.textContent='TIEMPO';
-    inpTime.style.cssText='width:100%;box-sizing:border-box;margin-top:4px';
-    const savBtn = document.createElement('button'); savBtn.className='btn btn-primary'; savBtn.style.marginTop='10px'; savBtn.textContent='Guardar';
-    savBtn.onclick = function() {
-      if (!DATA.pbs) DATA.pbs = {};
-      DATA.pbs[pbBestKey] = inpPrueba.value.trim();
-      DATA.pbs[pbBestKey + '_time'] = inpTime.value.trim();
-      S.editingPB = null;
-      render();
-    };
-    wrap.appendChild(inpPrueba); wrap.appendChild(lblT); wrap.appendChild(inpTime); wrap.appendChild(savBtn);
-    d.appendChild(wrap);
-  }
-
-  // Edit button handlers
-  d.addEventListener('click', function(e) {
-    if (e.target.id === 'btn-edit-100cr') { S.editingPB = '100cr'; render(); }
-    if (e.target.id === 'btn-edit-best') { S.editingPB = 'best'; render(); }
-  });
-
-  return d;
 }
 
 // Helper: RPE line chart SVG
@@ -5287,9 +5260,9 @@ function inscBanner(comp) {
 function inscCompCard(comp) {
   const card = document.createElement('div');
   card.className = 'welcome-card';
-  card.innerHTML = '<div style="font-size:0.65rem;letter-spacing:2px;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:6px">' + (comp.type || 'Competición') + '</div>'
-    + '<div style="font-size:1.15rem;font-weight:700;line-height:1.25">' + comp.name + '</div>'
-    + '<div style="font-size:0.8rem;color:var(--text2);margin-top:6px">📍 ' + (comp.location || '—') + ' &nbsp; 📅 ' + inscFmtDate(comp.start) + ' – ' + inscFmtDate(comp.end) + '</div>';
+  card.innerHTML = '<div style="font-size:0.65rem;letter-spacing:2px;text-transform:uppercase;color:var(--gold);font-weight:700;margin-bottom:6px">' + escapeHtml(comp.type || 'Competición') + '</div>'
+    + '<div style="font-size:1.15rem;font-weight:700;line-height:1.25">' + escapeHtml(comp.name) + '</div>'
+    + '<div style="font-size:0.8rem;color:var(--text2);margin-top:6px">📍 ' + escapeHtml(comp.location || '—') + ' &nbsp; 📅 ' + inscFmtDate(comp.start) + ' – ' + inscFmtDate(comp.end) + '</div>';
   card.appendChild(inscBanner(comp));
   return card;
 }
@@ -5513,7 +5486,7 @@ function buildCoachInscripcions() {
   if (pending.length > 0) {
     const p = document.createElement('div');
     p.style.cssText = 'font-size:0.72rem;color:var(--text2);padding:10px 14px;border-top:1px solid rgba(41,128,185,0.12)';
-    p.innerHTML = '⚠ Pendientes: <b style="color:var(--yellow)">' + pending.map(function(a){ return a.name; }).join(', ') + '</b>';
+    p.innerHTML = '⚠ Pendientes: <b style="color:var(--yellow)">' + pending.map(function(a){ return escapeHtml(a.name); }).join(', ') + '</b>';
     wrap.appendChild(p);
   }
   d.appendChild(wrap);
@@ -5556,7 +5529,7 @@ function buildCommentSheet() {
   const title = document.createElement('div'); title.className='sheet-title';
   const athleteFirst = S.commentAthlete ? S.commentAthlete.split(' ')[0] : '';
   const dateLabel = dateKey !== todayStr() ? ' <span style="font-size:0.75rem;color:var(--text2);font-weight:normal">(' + formatDateLabel(dateKey) + ')</span>' : '';
-  title.innerHTML = 'Mensaje para <strong>' + athleteFirst + '</strong>' + dateLabel;
+  title.innerHTML = 'Mensaje para <strong>' + escapeHtml(athleteFirst) + '</strong>' + dateLabel;
   title.appendChild(closeBtn);
 
   const ta = document.createElement('textarea');
@@ -5587,7 +5560,7 @@ function buildResultsSheet() {
   closeBtn.onclick = function() { S.viewResultsCompId = null; render(); };
 
   const title = document.createElement('div'); title.className = 'sheet-title';
-  title.innerHTML = '📋 Encuestas — <strong>' + (comp ? comp.name : '') + '</strong>';
+  title.innerHTML = '📋 Encuestas — <strong>' + (comp ? escapeHtml(comp.name) : '') + '</strong>';
   title.appendChild(closeBtn);
   sheet.appendChild(title);
 
