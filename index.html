@@ -689,6 +689,7 @@ let SB_STATUS = 'ok'; // 'ok' | 'nokey' | 'auth' | 'offline'
 // --- Sesión de coach (Supabase Auth) para que las policies RLS de escritura reconozcan auth.uid() ---
 const COACH_EMAIL = 'pablohschneider@gmail.com'; // solo prefill del formulario (el email no es secreto)
 let SB_ACCESS_TOKEN = null; // no restauramos token viejo al arrancar: caducaría y daría un 401 falso ("clave revocada"). El coach re-loguea por sesión.
+let LAST_AUTH_ERROR = null; // 'confirm' | 'creds'
 let COACH_CREDS = null; // {email,password} SOLO en memoria durante la sesion; nunca se guarda en disco ni se hardcodea
 
 // Tras iniciar sesión: mira el estado real del coach (pending/approved) y quién es admin.
@@ -704,6 +705,7 @@ async function fetchCoachStatus() {
     const rows = await res.json();
     if (!rows || !rows[0]) return null;
     S.isAdmin = !!rows[0].is_admin;
+    S.myTeamCode = rows[0].team_code || null;
     return rows[0].status;
   } catch (e) { console.error('fetchCoachStatus', e.message); return null; }
 }
@@ -720,7 +722,11 @@ async function coachSignIn(email, password) {
       headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: email, password: password })
     });
-    if (!res.ok) { console.error('Coach auth error', await res.text()); return false; }
+    if (!res.ok) {
+      const t = await res.text(); console.error('Coach auth error', t);
+      LAST_AUTH_ERROR = (t && t.indexOf('not confirmed') !== -1) ? 'confirm' : 'creds';
+      return false;
+    }
     const data = await res.json();
     SB_ACCESS_TOKEN = data.access_token;
     COACH_CREDS = { email: email, password: password };
@@ -790,9 +796,41 @@ function buildSbBanner() {
 let _athleteCache = null;
 async function dbGetAthletes() {
   if (_athleteCache) return _athleteCache;
-  const rows = await sbFetch('athletes_directory?select=id,name,morning_days,has_pin&order=name');
+  let rows;
+  if (S.role === 'coach') {
+    // El coach lee los suyos por RLS (la vista respeta el aislamiento por coach_id)
+    rows = await sbFetch('athletes_directory?select=id,name,morning_days,has_pin&order=name');
+  } else {
+    // Nadador (o pantalla de login): la lista se obtiene con el código de equipo.
+    // Sin código no hay nombres: así no se expone el roster a cualquiera.
+    const code = getTeamCode();
+    if (!code) { _athleteCache = []; return _athleteCache; }
+    try {
+      const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/athletes_by_team_code', {
+        method: 'POST',
+        headers: Object.assign({ 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+                               SB_ACCESS_TOKEN ? { 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN } : {}),
+        body: JSON.stringify({ p_code: code })
+      });
+      rows = res.ok ? await res.json() : [];
+    } catch (e) { console.error('athletes_by_team_code', e.message); rows = []; }
+  }
   _athleteCache = rows || [];
   return _athleteCache;
+}
+
+function getTeamCode() {
+  if (S.teamCode) return S.teamCode;
+  try { S.teamCode = localStorage.getItem('ondrift_team_code') || null; } catch (e) { S.teamCode = null; }
+  return S.teamCode;
+}
+function setTeamCode(code) {
+  S.teamCode = code ? code.trim().toUpperCase() : null;
+  try {
+    if (S.teamCode) localStorage.setItem('ondrift_team_code', S.teamCode);
+    else localStorage.removeItem('ondrift_team_code');
+  } catch (e) {}
+  _athleteCache = null;
 }
 async function dbAthleteId(name) {
   const athletes = await dbGetAthletes();
@@ -2233,6 +2271,61 @@ function buildLogin() {
 
   const card = document.createElement('div');
   card.className = 'login-card';
+
+  // Paso 1: sin código de equipo no se muestran nombres.
+  if (!getTeamCode()) {
+    const h2c = document.createElement('h2');
+    h2c.textContent = 'Código de equipo';
+    card.appendChild(h2c);
+
+    const pc = document.createElement('p');
+    pc.style.cssText = 'text-align:center;font-size:0.82rem;color:var(--text2);margin:6px 0 4px;';
+    pc.textContent = 'Pídeselo a tu entrenador. Solo hace falta la primera vez.';
+    card.appendChild(pc);
+
+    const inpCode = document.createElement('input');
+    inpCode.type = 'text'; inpCode.placeholder = 'Ej: ABC123';
+    inpCode.className = 'select-styled';
+    inpCode.autocapitalize = 'characters'; inpCode.autocorrect = 'off'; inpCode.spellcheck = false;
+    inpCode.maxLength = 6;
+    inpCode.style.cssText = 'text-transform:uppercase;letter-spacing:2px;text-align:center;font-weight:700;';
+    card.appendChild(inpCode);
+
+    if (S.teamCodeError) {
+      const e = document.createElement('div');
+      e.className = 'pin-error'; e.textContent = S.teamCodeError; e.style.marginTop = '10px';
+      card.appendChild(e);
+    }
+
+    const goCode = document.createElement('button');
+    goCode.className = 'btn btn-primary'; goCode.textContent = 'Continuar'; goCode.style.marginTop = '14px';
+    const trySubmit = async () => {
+      const v = (inpCode.value || '').trim().toUpperCase();
+      if (v.length < 4) { S.teamCodeError = 'Escribe el código completo.'; render(); return; }
+      goCode.disabled = true; goCode.textContent = 'Comprobando…';
+      setTeamCode(v);
+      const list = await dbGetAthletes();
+      if (!list.length) {
+        setTeamCode(null);
+        S.teamCodeError = 'Código no válido o equipo sin nadadores.';
+        render(); return;
+      }
+      DATA.athletes = list; S.teamCodeError = null; render();
+    };
+    goCode.onclick = trySubmit;
+    inpCode.onkeydown = (e) => { if (e.key === 'Enter') trySubmit(); };
+    card.appendChild(goCode);
+
+    const coachLink = document.createElement('button');
+    coachLink.className = 'btn btn-secondary'; coachLink.textContent = '🔒 Acceso Entrenador';
+    coachLink.style.marginTop = '10px';
+    coachLink.onclick = () => { S.role = 'pin'; render(); };
+    card.appendChild(coachLink);
+
+    d.appendChild(card);
+    return d;
+  }
+
   const h2 = document.createElement('h2');
   h2.textContent = 'Selecciona tu nombre';
   card.appendChild(h2);
@@ -2271,6 +2364,13 @@ function buildLogin() {
   btnCoach.onclick = () => { S.role = 'pin'; S.pinBuffer = ''; S.pinError = false; render(); };
   div.appendChild(btnCoach);
   card.appendChild(div);
+
+  const chg = document.createElement('button');
+  chg.textContent = 'Cambiar de equipo';
+  chg.style.cssText = 'display:block;margin:12px auto 0;background:none;border:none;color:var(--text2);font-size:0.75rem;text-decoration:underline;cursor:pointer;';
+  chg.onclick = () => { setTeamCode(null); DATA.athletes = []; S.teamCodeError = null; render(); };
+  card.appendChild(chg);
+
   d.appendChild(card);
   return d;
 }
@@ -2354,7 +2454,10 @@ function buildPin() {
 
   if (S.pinError) {
     const err = document.createElement('div');
-    err.className = 'pin-error'; err.textContent = 'Email o contrase\u00f1a incorrectos.';
+    err.className = 'pin-error';
+    err.textContent = (LAST_AUTH_ERROR === 'confirm')
+      ? 'Tienes que confirmar tu email antes de entrar. Busca el correo de confirmaci\u00f3n en tu bandeja (y en spam).'
+      : 'Email o contrase\u00f1a incorrectos.';
     err.style.marginTop = '12px';
     card.appendChild(err);
   }
@@ -3547,6 +3650,19 @@ function buildCalendar() {
 // ============================================================
 function buildTeamCoachesTab() {
   const d = document.createElement('div');
+
+  const codeCard = document.createElement('div'); codeCard.className = 'card'; codeCard.style.marginBottom = '12px';
+  const codeLbl = document.createElement('label'); codeLbl.className = 'field-label'; codeLbl.textContent = 'Código de equipo';
+  codeCard.appendChild(codeLbl);
+  const codeP = document.createElement('p');
+  codeP.style.cssText = 'font-size:0.8rem;color:var(--text2);margin:0 0 10px;';
+  codeP.textContent = 'Tus nadadores lo escriben la primera vez que entran, para ver la lista de nombres de tu equipo.';
+  codeCard.appendChild(codeP);
+  const codeVal = document.createElement('div');
+  codeVal.style.cssText = 'text-align:center;font-size:1.6rem;font-weight:800;letter-spacing:5px;padding:10px;border-radius:12px;background:rgba(255,255,255,0.5);border:1px solid rgba(255,255,255,0.7);';
+  codeVal.textContent = S.myTeamCode || '—';
+  codeCard.appendChild(codeVal);
+  d.appendChild(codeCard);
 
   const pwCard = document.createElement('div'); pwCard.className = 'card';
   const pwLbl = document.createElement('label'); pwLbl.className = 'field-label'; pwLbl.textContent = 'Mi cuenta';
