@@ -709,6 +709,21 @@ async function fetchCoachStatus() {
   } catch (e) { console.error('fetchCoachStatus', e.message); return null; }
 }
 
+async function fetchPendingCoachCount() {
+  if (!S.isAdmin) { S.pendingCoachCount = 0; return; }
+  try {
+    const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/list_coaches_for_admin', {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json' },
+      body: '{}'
+    });
+    if (!res.ok) return;
+    const rows = await res.json();
+    S.pendingCoachCount = rows.filter(c => c.status === 'pending').length;
+    if (S.role === 'coach') render();
+  } catch (e) { console.error('fetchPendingCoachCount', e.message); }
+}
+
 async function coachSignIn(email, password) {
   // Sin argumentos = reintento silencioso con las credenciales en memoria (p.ej. token expirado)
   if (!email || !password) {
@@ -1387,6 +1402,7 @@ let S = {
   athleteName: null,
   pinMode: 'login', // 'login' | 'signup'
   isAdmin: false,
+  pendingCoachCount: 0,
   showCoachAdmin: false,
   coachList: null,
   adminBusy: false,
@@ -2569,7 +2585,7 @@ function buildPin() {
   const routeAfterAuth = async () => {
     const status = await fetchCoachStatus();
     S.coachEmail = null;
-    if (status === 'approved') { S.role = 'coach'; S.tab = 0; renderAsync(); }
+    if (status === 'approved') { S.role = 'coach'; S.tab = 0; fetchPendingCoachCount(); renderAsync(); }
     else { S.role = 'coach_pending'; S.coachStatus = status; render(); }
   };
 
@@ -2842,7 +2858,7 @@ async function openCoachAdminModal() {
                 headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
                 body: JSON.stringify({ status: newStatus })
               });
-              if (r.ok) loadList(); else alert('No se pudo actualizar.');
+              if (r.ok) { loadList(); fetchPendingCoachCount(); } else alert('No se pudo actualizar.');
             } catch (e) { alert('Sin conexi\u00f3n.'); }
           };
           if (c.status !== 'approved') {
@@ -2926,6 +2942,7 @@ function buildBottomNav() {
       btn.className = 'nav-item' + (S.tab === i ? ' active' : '');
       btn.title = item.label;
       btn.innerHTML = `<svg viewBox="0 0 24 24">${NAV_ICONS[item.icon]}</svg>`;
+      if (item.icon === 'equipo' && S.isAdmin && S.pendingCoachCount > 0) btn.innerHTML += '<span class="nav-dot"></span>';
       btn.onclick = () => { S.tab = i; render(); };
       nav.appendChild(btn);
     });
