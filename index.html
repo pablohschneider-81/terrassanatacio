@@ -2249,7 +2249,11 @@ function render() {
   if (sbBanner) app.appendChild(sbBanner);
 
   if (!S.role) { app.appendChild(buildLogin()); return; }
-  if (S.role === 'pin') { app.appendChild(buildPin()); return; }
+  if (S.role === 'pin') {
+    app.appendChild(buildPin());
+    if (S.showConfirmEmailModal) app.appendChild(buildConfirmEmailModal());
+    return;
+  }
   if (S.role === 'athlete_pin') { app.appendChild(buildAthletePin()); return; }
   if (S.role === 'coach_pending') { app.appendChild(buildCoachPending()); return; }
 
@@ -2469,6 +2473,38 @@ function buildCoachPending() {
   return d;
 }
 
+function buildConfirmEmailModal() {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:24px; background:rgba(26,42,58,0.45); backdrop-filter:blur(4px);';
+
+  const card = document.createElement('div');
+  card.className = 'login-card';
+  card.style.cssText += 'max-width:320px; text-align:center;';
+
+  const icon = document.createElement('div');
+  icon.style.cssText = 'font-size:40px; margin-bottom:10px;';
+  icon.textContent = '\u{1F4E7}';
+  card.appendChild(icon);
+
+  const h3 = document.createElement('h2');
+  h3.textContent = 'Revisa tu correo';
+  card.appendChild(h3);
+
+  const p = document.createElement('p');
+  p.style.cssText = 'color:var(--text2); font-size:0.9rem; line-height:1.5; margin-top:-8px; margin-bottom:16px;';
+  p.textContent = 'Te enviamos un email de confirmaci\u00f3n. Toca el enlace para activar tu cuenta y luego entra con tu contrase\u00f1a (revisa tambi\u00e9n la carpeta de spam).';
+  card.appendChild(p);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn-primary';
+  closeBtn.textContent = 'Entendido';
+  closeBtn.onclick = () => { S.showConfirmEmailModal = false; render(); };
+  card.appendChild(closeBtn);
+
+  ov.appendChild(card);
+  return ov;
+}
+
 function buildPin() {
   const d = document.createElement('div');
   d.className = 'login-screen';
@@ -2477,7 +2513,7 @@ function buildPin() {
   backBtn.className = 'btn-exit';
   backBtn.textContent = '\u2190 Volver';
   backBtn.style.cssText = 'position:absolute; top:20px; left:16px; z-index:2;';
-  backBtn.onclick = () => { S.role = null; S.pinError = false; S.pinMode = 'login'; S.signupError = null; S.signupMsg = null; render(); };
+  backBtn.onclick = () => { S.role = null; S.pinError = false; S.pinMode = 'login'; S.signupError = null; render(); };
   d.appendChild(backBtn);
 
   const card = document.createElement('div');
@@ -2529,13 +2565,6 @@ function buildPin() {
     err.style.marginTop = '12px';
     card.appendChild(err);
   }
-  if (S.signupMsg) {
-    const msg = document.createElement('div');
-    msg.style.cssText = 'margin-top:12px; text-align:center; color:var(--green); font-size:0.9rem;';
-    msg.textContent = S.signupMsg;
-    card.appendChild(msg);
-  }
-
   // Tras login/registro OK: mira tu estado real y decide a donde vas
   const routeAfterAuth = async () => {
     const status = await fetchCoachStatus();
@@ -2551,7 +2580,7 @@ function buildPin() {
   if (isSignup) {
     submit.textContent = 'Crear cuenta';
     const doSignup = async () => {
-      S.signupError = null; S.signupMsg = null;
+      S.signupError = null;
       const em = (email.value || '').trim();
       if (!em || pass.value.length < 8) { S.signupError = 'Email v\u00e1lido y contrase\u00f1a de m\u00ednimo 8 caracteres.'; render(); return; }
       if (pass.value !== pass2.value) { S.signupError = 'Las contrase\u00f1as no coinciden.'; render(); return; }
@@ -2574,9 +2603,8 @@ function buildPin() {
           await routeAfterAuth();
         } else {
           // requiere confirmar email antes de poder entrar
-          S.signupMsg = 'Cuenta creada. Revisa tu email para confirmarla y luego entra con tu contrase\u00f1a.';
           S.pinMode = 'login'; S.coachEmail = em;
-          submit.disabled = false; render();
+          submit.disabled = false; S.showConfirmEmailModal = true; render();
         }
       } catch (e) {
         S.signupError = 'Sin conexi\u00f3n.'; submit.disabled = false; submit.textContent = 'Crear cuenta'; render();
@@ -2600,7 +2628,7 @@ function buildPin() {
   toggle.className = 'btn btn-secondary';
   toggle.style.marginTop = '10px';
   toggle.textContent = isSignup ? 'Ya tengo cuenta' : '\u00bfEres nuevo? Crear cuenta';
-  toggle.onclick = () => { S.pinMode = isSignup ? 'login' : 'signup'; S.pinError = false; S.signupError = null; S.signupMsg = null; render(); };
+  toggle.onclick = () => { S.pinMode = isSignup ? 'login' : 'signup'; S.pinError = false; S.signupError = null; render(); };
   card.appendChild(toggle);
 
   d.appendChild(card);
