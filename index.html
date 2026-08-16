@@ -731,13 +731,14 @@ async function coachSignIn(email, password) {
     email = COACH_CREDS.email; password = COACH_CREDS.password;
   }
   try {
-    const res = await fetch(SUPABASE_URL + '/auth/v1/token?grant_type=password', {
+    const res = await fetch(SUPABASE_URL + '/functions/v1/coach-login', {
       method: 'POST',
       headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: email, password: password })
     });
     if (!res.ok) {
       const t = await res.text(); console.error('Coach auth error', t);
+      if (res.status === 423) { LAST_AUTH_ERROR = 'locked'; return false; }
       LAST_AUTH_ERROR = (t && t.indexOf('not confirmed') !== -1) ? 'confirm' : 'creds';
       return false;
     }
@@ -2571,6 +2572,8 @@ function buildPin() {
     err.className = 'pin-error';
     err.textContent = (LAST_AUTH_ERROR === 'confirm')
       ? 'Tienes que confirmar tu email antes de entrar. Busca el correo de confirmaci\u00f3n en tu bandeja (y en spam).'
+      : (LAST_AUTH_ERROR === 'locked')
+      ? 'Cuenta bloqueada por intentos fallidos. Ped\u00ed a tu entrenador/admin que la reactive.'
       : 'Email o contrase\u00f1a incorrectos.';
     err.style.marginTop = '12px';
     card.appendChild(err);
@@ -2844,13 +2847,28 @@ async function openCoachAdminModal() {
         info.style.cssText = 'display:flex; flex-direction:column; min-width:0;';
         const em = document.createElement('span'); em.style.cssText = 'font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'; em.textContent = c.email + (c.is_admin ? ' \u2b50' : '');
         const st = document.createElement('span'); st.style.cssText = 'font-size:0.75rem; color:var(--text-secondary);';
-        st.textContent = c.status === 'approved' ? 'Aprobado' : c.status === 'rejected' ? 'Rechazado' : 'Pendiente';
+        st.textContent = (c.status === 'approved' ? 'Aprobado' : c.status === 'rejected' ? 'Rechazado' : 'Pendiente') + (c.login_locked ? ' \u2022 \ud83d\udd12 Bloqueada' : '');
         info.appendChild(em); info.appendChild(st);
         row.appendChild(info);
 
         if (!c.is_admin) {
           const actions = document.createElement('div');
           actions.style.cssText = 'display:flex; gap:6px; flex-shrink:0;';
+          if (c.login_locked) {
+            const unlock = document.createElement('button'); unlock.className = 'btn-exit'; unlock.textContent = '\ud83d\udd13';
+            unlock.title = 'Reactivar cuenta bloqueada';
+            unlock.onclick = async () => {
+              try {
+                const r = await fetch(SUPABASE_URL + '/rest/v1/coaches?id=eq.' + c.id, {
+                  method: 'PATCH',
+                  headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+                  body: JSON.stringify({ login_locked: false, login_attempts: 0 })
+                });
+                if (r.ok) loadList(); else alert('No se pudo reactivar.');
+              } catch (e) { alert('Sin conexi\u00f3n.'); }
+            };
+            actions.appendChild(unlock);
+          }
           const setStatus = async (newStatus) => {
             try {
               const r = await fetch(SUPABASE_URL + '/rest/v1/coaches?id=eq.' + c.id, {
@@ -2858,7 +2876,10 @@ async function openCoachAdminModal() {
                 headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
                 body: JSON.stringify({ status: newStatus })
               });
-              if (r.ok) { loadList(); fetchPendingCoachCount(); } else alert('No se pudo actualizar.');
+              if (r.ok) {
+                loadList(); fetchPendingCoachCount();
+                if (newStatus === 'approved') sbFunctionCall('send-coach-approved-email', { email: c.email }, true);
+              } else alert('No se pudo actualizar.');
             } catch (e) { alert('Sin conexi\u00f3n.'); }
           };
           if (c.status !== 'approved') {
