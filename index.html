@@ -2927,12 +2927,6 @@ async function openCoachAdminModal() {
   bulkBar.append(bulkCount, bulkDelBtn);
   card.appendChild(bulkBar);
 
-  const quickBtn = document.createElement('button');
-  quickBtn.className = 'btn btn-secondary';
-  quickBtn.style.cssText = 'margin-top:10px; font-size:0.78rem; padding:8px 12px;';
-  quickBtn.textContent = 'Marcar todos los "athlete-xxx" pendientes';
-  card.appendChild(quickBtn);
-
   const list = document.createElement('div');
   list.style.cssText = 'margin-top:12px; display:flex; flex-direction:column; gap:10px;';
   list.textContent = 'Cargando\u2026';
@@ -2952,14 +2946,6 @@ async function openCoachAdminModal() {
   const updateBulkBar = () => {
     bulkBar.style.display = selected.size > 0 ? 'flex' : 'none';
     bulkCount.textContent = selected.size + ' seleccionado' + (selected.size !== 1 ? 's' : '');
-  };
-
-  quickBtn.onclick = () => {
-    lastRows.forEach(c => {
-      if (!c.is_admin && c.status === 'pending' && /^athlete-/.test(c.email || '')) selected.add(c.id);
-    });
-    updateBulkBar();
-    loadList(true);
   };
 
   bulkDelBtn.onclick = () => {
