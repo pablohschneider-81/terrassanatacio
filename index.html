@@ -1312,11 +1312,21 @@ async function dbSaveComment(date, athleteName, text) {
 let _compCache = null;
 async function dbGetCompetitions() {
   if (_compCache) return _compCache;
-  // Multi-club: cada equipo solo ve sus propias competiciones, filtradas
-  // por team_code — mismo código que empareja al nadador con su equipo.
-  const code = S.role === 'coach' ? S.myTeamCode : getTeamCode();
-  if (!code) return [];
-  const rows = await sbFetch('competitions?select=*&team_code=eq.' + encodeURIComponent(code) + '&order=start_date');
+  let rows;
+  if (S.role === 'coach') {
+    // RLS ya aísla por coach: coach_id = auth.uid(). No hace falta filtrar acá.
+    rows = await sbFetch('competitions?select=*&order=start_date');
+  } else {
+    // El atleta entra por PIN, sin auth.uid() real, así que la RLS directa
+    // no le sirve. Usa el RPC list_competitions_for_team, que resuelve
+    // coach_id a partir del team_code (mismo patrón que team-roster).
+    const code = getTeamCode();
+    if (!code) return [];
+    rows = await sbFetch('rpc/list_competitions_for_team', {
+      method: 'POST',
+      body: JSON.stringify({ p_team_code: code })
+    });
+  }
   _compCache = (rows || []).map(r => ({
     id: r.id, name: r.name, start: r.start_date, end: r.end_date,
     location: r.location, type: r.type,
@@ -1332,7 +1342,7 @@ async function dbAddCompetition(comp) {
   const fmt = function(d) { return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   await sbFetch('competitions', {
     method: 'POST',
-    body: JSON.stringify({ name: comp.name, start_date: comp.start, end_date: comp.end, location: comp.location || '', type: comp.type || 'Regional', max_events: comp.maxEvents || 6, insc_open: fmt(openD), insc_close: fmt(closeD), team_code: S.myTeamCode })
+    body: JSON.stringify({ name: comp.name, start_date: comp.start, end_date: comp.end, location: comp.location || '', type: comp.type || 'Regional', max_events: comp.maxEvents || 6, insc_open: fmt(openD), insc_close: fmt(closeD) })
   });
   _compCache = null;
 }
