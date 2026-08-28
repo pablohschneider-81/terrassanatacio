@@ -765,6 +765,7 @@ let SB_STATUS = 'ok'; // 'ok' | 'nokey' | 'auth' | 'offline'
 
 // --- Sesión de coach (Supabase Auth) para que las policies RLS de escritura reconozcan auth.uid() ---
 let SB_ACCESS_TOKEN = null; // no restauramos token viejo al arrancar: caducaría y daría un 401 falso ("clave revocada"). El coach re-loguea por sesión.
+let SB_REFRESH_TOKEN = null; // el nadador sí: su refresh_token permite renovar el access_token caducado sin volver a pedir el PIN.
 let LAST_AUTH_ERROR = null; // 'confirm' | 'creds'
 let COACH_CREDS = null; // {email,password} SOLO en memoria durante la sesion; nunca se guarda en disco ni se hardcodea
 
@@ -830,6 +831,39 @@ async function coachSignIn(email, password) {
   }
 }
 
+async function refreshAthleteSession() {
+  // Renueva el access_token del nadador con su refresh_token, sin pedir el PIN.
+  if (!SB_REFRESH_TOKEN) {
+    try { SB_REFRESH_TOKEN = localStorage.getItem('ondrift_sb_refresh') || null; } catch (e) {}
+  }
+  if (!SB_REFRESH_TOKEN) return false;
+  try {
+    const res = await fetch(SUPABASE_URL + '/auth/v1/token?grant_type=refresh_token', {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: SB_REFRESH_TOKEN })
+    });
+    if (!res.ok) {
+      // El refresh_token también caducó o fue revocado: hay que re-loguear.
+      SB_REFRESH_TOKEN = null;
+      try { localStorage.removeItem('ondrift_sb_refresh'); } catch (e) {}
+      return false;
+    }
+    const data = await res.json();
+    if (!data || !data.access_token) return false;
+    SB_ACCESS_TOKEN = data.access_token;
+    try { localStorage.setItem('ondrift_sb_token', SB_ACCESS_TOKEN); } catch (e) {}
+    if (data.refresh_token) {
+      SB_REFRESH_TOKEN = data.refresh_token;
+      try { localStorage.setItem('ondrift_sb_refresh', SB_REFRESH_TOKEN); } catch (e) {}
+    }
+    return true;
+  } catch (e) {
+    console.error('refreshAthleteSession', e.message);
+    return false;
+  }
+}
+
 async function sbFetch(path, options) {
   if (SUPABASE_KEY.indexOf('PEGA_AQUI') === 0) { SB_STATUS = 'nokey'; return null; }
   const url = SUPABASE_URL + '/rest/v1/' + path;
@@ -844,9 +878,15 @@ async function sbFetch(path, options) {
     if (!res.ok) {
       const err = await res.text(); console.error('SB error', path, err);
       if ((res.status === 401 || res.status === 403) && SB_ACCESS_TOKEN) {
-        // El token pudo expirar: reautenticamos una vez en background y reintentamos
-        const ok = await coachSignIn();
-        if (ok) return sbFetch(path, options);
+        // El token pudo expirar. El nadador renueva con su refresh_token;
+        // el coach reautentica con las credenciales en memoria.
+        if (S.role === 'athlete') {
+          const refreshed = await refreshAthleteSession();
+          if (refreshed) return sbFetch(path, options);
+        } else {
+          const ok = await coachSignIn();
+          if (ok) return sbFetch(path, options);
+        }
       }
       if (res.status === 401 || res.status === 403) SB_STATUS = 'auth';
       return null;
@@ -1622,8 +1662,10 @@ const DATA = {
 // (otro coach/atleta en el mismo dispositivo) no pinte la caché del anterior.
 function resetSession() {
   SB_ACCESS_TOKEN = null;
+  SB_REFRESH_TOKEN = null;
   COACH_CREDS = null;
   try { localStorage.removeItem('ondrift_sb_token'); } catch (e) {}
+  try { localStorage.removeItem('ondrift_sb_refresh'); } catch (e) {}
   // Caché de datos
   DATA.athletes = []; DATA.sessions = {}; DATA.allSessions = [];
   DATA.rpe = {}; DATA.comments = {}; DATA.competitions = []; DATA.events = [];
@@ -2807,6 +2849,14 @@ function buildAthletePin() {
             if (r.ok && r.data && r.data.access_token) {
               SB_ACCESS_TOKEN = r.data.access_token;
               localStorage.setItem('ondrift_sb_token', SB_ACCESS_TOKEN);
+              // El access_token caduca (~1h). Sin guardar el refresh_token, al
+              // caducar TODA consulta del nadador daba 401 -> null: el calendario
+              // se quedaba sin competiciones y el check-in matinal se volvía a
+              // pedir cada vez porque no podía leer el ya guardado.
+              if (r.data.refresh_token) {
+                SB_REFRESH_TOKEN = r.data.refresh_token;
+                localStorage.setItem('ondrift_sb_refresh', SB_REFRESH_TOKEN);
+              }
               S.role = 'athlete';
               S.athleteName = S.pendingAthleteName;
               S.ath_tab = 0;
