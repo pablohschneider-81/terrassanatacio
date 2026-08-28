@@ -706,6 +706,58 @@ const ONDRIFT_ICON_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAggAAAII
 // ============================================================
 // SUPABASE CONFIG
 // ============================================================
+// ============================================================
+// CHEQUEO DE VERSIÓN (evita tener que borrar/recrear el acceso directo)
+// Compara un hash del HTML servido ahora contra el que quedó guardado la
+// última vez. Si cambió (subiste un index.html nuevo a GitHub), muestra un
+// banner para actualizar con un toque, forzando una carga que salta la
+// caché — sin tocar el ícono de la pantalla de inicio.
+// ============================================================
+(function(){
+  async function sha256(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+  }
+  function showUpdateBanner() {
+    if (document.getElementById('od-update-banner')) return;
+    const b = document.createElement('div');
+    b.id = 'od-update-banner';
+    b.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));z-index:99999;background:#0a1628;color:#fff;padding:14px 16px;border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:-apple-system,system-ui,sans-serif;font-size:0.88rem';
+    b.innerHTML = '<span>Hay una versión nueva de Ondrift.</span>';
+    const btn = document.createElement('button');
+    btn.textContent = 'Actualizar';
+    btn.style.cssText = 'background:#e74c3c;color:#fff;border:none;padding:8px 14px;border-radius:10px;font-weight:700;font-size:0.85rem;flex-shrink:0';
+    btn.onclick = function() {
+      btn.textContent = '…';
+      try { localStorage.setItem('ondrift_build_hash', window.__odFreshHash || ''); } catch(e) {}
+      location.replace(location.pathname + '?v=' + Date.now());
+    };
+    b.appendChild(btn);
+    document.body.appendChild(b);
+  }
+  async function checkForUpdate() {
+    try {
+      const res = await fetch(location.pathname, { cache: 'no-store' });
+      if (!res.ok) return;
+      const text = await res.text();
+      const hash = await sha256(text);
+      window.__odFreshHash = hash;
+      let stored = null;
+      try { stored = localStorage.getItem('ondrift_build_hash'); } catch(e) {}
+      if (stored === null) {
+        try { localStorage.setItem('ondrift_build_hash', hash); } catch(e) {}
+        return;
+      }
+      if (stored !== hash) showUpdateBanner();
+    } catch (e) { /* sin red: no molestar */ }
+  }
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(checkForUpdate, 800);
+  } else {
+    document.addEventListener('DOMContentLoaded', function(){ setTimeout(checkForUpdate, 800); });
+  }
+})();
+
 const SUPABASE_URL = 'https://skblkxwaxnefycgrqeyt.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Wc-Lo4L8ZPZ_OOg1F8iVVg_vWPEabtn'; // clave pública (terrassanatacio) — diseñada para ir en el cliente
 
@@ -1648,6 +1700,13 @@ function wellBaseline(name) {
 }
 
 async function loadData() {
+  // No pedir nada a Supabase hasta saber quién sos: si esto corre antes del
+  // login (S.role === null), las respuestas anónimas/vacías quedaban
+  // cacheadas para siempre (_compCache, _eventsCache, etc. son "truthy" con
+  // un array vacío) y nunca se volvían a pedir tras loguearse — la
+  // competencia recién creada forzaba el único refetch real porque
+  // dbAddCompetition() es de las pocas funciones que limpia esa caché.
+  if (!S.role) return;
   // Carga en paralelo: 7 peticiones máximo (antes ~35 en cascada).
   // Las cachés evitan refetch de lo que no cambió tras una acción.
   const tasks = [
