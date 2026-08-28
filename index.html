@@ -930,6 +930,7 @@ function setTeamCode(code) {
     else localStorage.removeItem('ondrift_team_code');
   } catch (e) {}
   _athleteCache = null;
+  _compCache = null;
 }
 async function dbAthleteId(name) {
   const athletes = await dbGetAthletes();
@@ -1311,7 +1312,11 @@ async function dbSaveComment(date, athleteName, text) {
 let _compCache = null;
 async function dbGetCompetitions() {
   if (_compCache) return _compCache;
-  const rows = await sbFetch('competitions?select=*&order=start_date');
+  // Multi-club: cada equipo solo ve sus propias competiciones, filtradas
+  // por team_code — mismo código que empareja al nadador con su equipo.
+  const code = S.role === 'coach' ? S.myTeamCode : getTeamCode();
+  if (!code) return [];
+  const rows = await sbFetch('competitions?select=*&team_code=eq.' + encodeURIComponent(code) + '&order=start_date');
   _compCache = (rows || []).map(r => ({
     id: r.id, name: r.name, start: r.start_date, end: r.end_date,
     location: r.location, type: r.type,
@@ -1327,7 +1332,7 @@ async function dbAddCompetition(comp) {
   const fmt = function(d) { return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
   await sbFetch('competitions', {
     method: 'POST',
-    body: JSON.stringify({ name: comp.name, start_date: comp.start, end_date: comp.end, location: comp.location || '', type: comp.type || 'Regional', max_events: comp.maxEvents || 6, insc_open: fmt(openD), insc_close: fmt(closeD) })
+    body: JSON.stringify({ name: comp.name, start_date: comp.start, end_date: comp.end, location: comp.location || '', type: comp.type || 'Regional', max_events: comp.maxEvents || 6, insc_open: fmt(openD), insc_close: fmt(closeD), team_code: S.myTeamCode })
   });
   _compCache = null;
 }
@@ -2913,6 +2918,21 @@ async function openCoachAdminModal() {
   card.style.cssText = 'max-width:440px; width:100%; max-height:80vh; overflow-y:auto;';
   const h = document.createElement('h2'); h.textContent = 'Entrenadores'; card.appendChild(h);
 
+  const selected = new Set(); // ids marcados para borrar en bloque
+
+  const bulkBar = document.createElement('div');
+  bulkBar.style.cssText = 'display:none; align-items:center; justify-content:space-between; gap:8px; background:rgba(192,57,43,0.12); border:1px solid rgba(192,57,43,0.4); border-radius:10px; padding:8px 12px; margin-top:10px;';
+  const bulkCount = document.createElement('span'); bulkCount.style.cssText = 'font-size:0.8rem; font-weight:700; color:var(--accent2)';
+  const bulkDelBtn = document.createElement('button'); bulkDelBtn.className = 'btn btn-danger'; bulkDelBtn.style.cssText = 'padding:7px 12px; font-size:0.8rem'; bulkDelBtn.textContent = 'Borrar seleccionados';
+  bulkBar.append(bulkCount, bulkDelBtn);
+  card.appendChild(bulkBar);
+
+  const quickBtn = document.createElement('button');
+  quickBtn.className = 'btn btn-secondary';
+  quickBtn.style.cssText = 'margin-top:10px; font-size:0.78rem; padding:8px 12px;';
+  quickBtn.textContent = 'Marcar todos los "athlete-xxx" pendientes';
+  card.appendChild(quickBtn);
+
   const list = document.createElement('div');
   list.style.cssText = 'margin-top:12px; display:flex; flex-direction:column; gap:10px;';
   list.textContent = 'Cargando\u2026';
@@ -2927,8 +2947,44 @@ async function openCoachAdminModal() {
   ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
   document.body.appendChild(ov);
 
-  const loadList = async () => {
-    list.textContent = 'Cargando\u2026';
+  let lastRows = [];
+
+  const updateBulkBar = () => {
+    bulkBar.style.display = selected.size > 0 ? 'flex' : 'none';
+    bulkCount.textContent = selected.size + ' seleccionado' + (selected.size !== 1 ? 's' : '');
+  };
+
+  quickBtn.onclick = () => {
+    lastRows.forEach(c => {
+      if (!c.is_admin && c.status === 'pending' && /^athlete-/.test(c.email || '')) selected.add(c.id);
+    });
+    updateBulkBar();
+    loadList(true);
+  };
+
+  bulkDelBtn.onclick = () => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    showConfirm(
+      '¿Borrar ' + ids.length + ' entrenador' + (ids.length !== 1 ? 'es' : '') + '?',
+      'Se eliminan las cuentas por completo. No se puede deshacer.',
+      function() {
+        bulkDelBtn.disabled = true; bulkDelBtn.textContent = 'Borrando…';
+        Promise.all(ids.map(id => fetch(SUPABASE_URL + '/rest/v1/coaches?id=eq.' + id, {
+          method: 'DELETE',
+          headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Prefer': 'return=minimal' }
+        }))).then(() => {
+          selected.clear(); updateBulkBar();
+          bulkDelBtn.disabled = false; bulkDelBtn.textContent = 'Borrar seleccionados';
+          fetchPendingCoachCount();
+          loadList();
+        });
+      }
+    );
+  };
+
+  const loadList = async (keepSelection) => {
+    if (!keepSelection) list.textContent = 'Cargando\u2026';
     try {
       const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/list_coaches_for_admin', {
         method: 'POST',
@@ -2937,14 +2993,24 @@ async function openCoachAdminModal() {
       });
       if (!res.ok) { list.textContent = 'No se pudo cargar la lista.'; return; }
       const rows = await res.json();
+      lastRows = rows;
       list.innerHTML = '';
       if (!rows.length) { list.textContent = 'No hay entrenadores registrados.'; return; }
       rows.forEach(c => {
         const row = document.createElement('div');
         row.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; border-radius:12px; background:rgba(255,255,255,0.5); border:1px solid rgba(255,255,255,0.7);';
 
+        if (!c.is_admin) {
+          const chk = document.createElement('input');
+          chk.type = 'checkbox';
+          chk.style.cssText = 'flex-shrink:0; width:18px; height:18px;';
+          chk.checked = selected.has(c.id);
+          chk.onchange = () => { if (chk.checked) selected.add(c.id); else selected.delete(c.id); updateBulkBar(); };
+          row.appendChild(chk);
+        }
+
         const info = document.createElement('div');
-        info.style.cssText = 'display:flex; flex-direction:column; min-width:0;';
+        info.style.cssText = 'display:flex; flex-direction:column; min-width:0; flex:1;';
         const em = document.createElement('span'); em.style.cssText = 'font-weight:600; font-size:0.85rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'; em.textContent = c.email + (c.is_admin ? ' \u2b50' : '');
         const st = document.createElement('span'); st.style.cssText = 'font-size:0.75rem; color:var(--text-secondary);';
         st.textContent = (c.status === 'approved' ? 'Aprobado' : c.status === 'rejected' ? 'Rechazado' : 'Pendiente') + (c.login_locked ? ' \u2022 \ud83d\udd12 Bloqueada' : '');
@@ -2990,10 +3056,25 @@ async function openCoachAdminModal() {
             const no = document.createElement('button'); no.className = 'btn-exit'; no.textContent = '\u274c';
             no.onclick = () => setStatus('rejected'); actions.appendChild(no);
           }
+          const del = document.createElement('button'); del.className = 'btn-exit'; del.textContent = '\ud83d\uddd1';
+          del.title = 'Borrar cuenta por completo';
+          del.onclick = () => {
+            showConfirm('¿Borrar "' + c.email + '"?', 'Se elimina por completo. No se puede deshacer.', function() {
+              fetch(SUPABASE_URL + '/rest/v1/coaches?id=eq.' + c.id, {
+                method: 'DELETE',
+                headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Prefer': 'return=minimal' }
+              }).then(function(r) {
+                if (r.ok) { selected.delete(c.id); updateBulkBar(); loadList(); fetchPendingCoachCount(); }
+                else alert('No se pudo borrar.');
+              }).catch(function() { alert('Sin conexi\u00f3n.'); });
+            });
+          };
+          actions.appendChild(del);
           row.appendChild(actions);
         }
         list.appendChild(row);
       });
+      updateBulkBar();
     } catch (e) { list.textContent = 'Sin conexi\u00f3n.'; }
   };
   loadList();
