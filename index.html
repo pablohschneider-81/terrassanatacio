@@ -1312,21 +1312,11 @@ async function dbSaveComment(date, athleteName, text) {
 let _compCache = null;
 async function dbGetCompetitions() {
   if (_compCache) return _compCache;
-  let rows;
-  if (S.role === 'coach') {
-    // RLS ya aísla por coach: coach_id = auth.uid(). No hace falta filtrar acá.
-    rows = await sbFetch('competitions?select=*&order=start_date');
-  } else {
-    // El atleta entra por PIN, sin auth.uid() real, así que la RLS directa
-    // no le sirve. Usa el RPC list_competitions_for_team, que resuelve
-    // coach_id a partir del team_code (mismo patrón que team-roster).
-    const code = getTeamCode();
-    if (!code) return [];
-    rows = await sbFetch('rpc/list_competitions_for_team', {
-      method: 'POST',
-      body: JSON.stringify({ p_team_code: code })
-    });
-  }
+  // La RLS ya aísla por club para ambos roles: el coach por
+  // coach_id = auth.uid(), y el nadador por coach_id =
+  // current_athlete_coach_id() (el login por PIN le da un JWT real).
+  // No hace falta filtrar nada acá.
+  const rows = await sbFetch('competitions?select=*&order=start_date');
   _compCache = (rows || []).map(r => ({
     id: r.id, name: r.name, start: r.start_date, end: r.end_date,
     location: r.location, type: r.type,
