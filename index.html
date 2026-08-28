@@ -773,11 +773,17 @@ let COACH_CREDS = null; // {email,password} SOLO en memoria durante la sesion; n
 // Devuelve 'approved' | 'pending' | 'rejected' | null (error de red)
 async function fetchCoachStatus() {
   try {
+    // Timeout de 15s: sin esto, una petición que nunca resuelve dejaba el
+    // botón en "Entrando…" para siempre, sin mensaje ni forma de reintentar.
+    const ctrl = new AbortController();
+    const timer = setTimeout(function(){ ctrl.abort(); }, 15000);
     const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/my_coach_status', {
       method: 'POST',
       headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json' },
-      body: '{}'
+      body: '{}',
+      signal: ctrl.signal
     });
+    clearTimeout(timer);
     if (!res.ok) return null;
     const rows = await res.json();
     if (!rows || !rows[0]) return null;
@@ -864,7 +870,7 @@ async function refreshAthleteSession() {
   }
 }
 
-async function sbFetch(path, options) {
+async function sbFetch(path, options, _retry) {
   if (SUPABASE_KEY.indexOf('PEGA_AQUI') === 0) { SB_STATUS = 'nokey'; return null; }
   const url = SUPABASE_URL + '/rest/v1/' + path;
   const headers = {
@@ -877,15 +883,18 @@ async function sbFetch(path, options) {
     const res = await fetch(url, { ...options, headers: { ...headers, ...(options && options.headers || {}) } });
     if (!res.ok) {
       const err = await res.text(); console.error('SB error', path, err);
-      if ((res.status === 401 || res.status === 403) && SB_ACCESS_TOKEN) {
+      // Un solo reintento: sin este tope, un 401 persistente hacía
+      // sbFetch -> login -> sbFetch -> login... en bucle infinito y la
+      // pantalla se quedaba colgada en "Entrando…" sin ningún error.
+      if ((res.status === 401 || res.status === 403) && SB_ACCESS_TOKEN && !_retry) {
         // El token pudo expirar. El nadador renueva con su refresh_token;
         // el coach reautentica con las credenciales en memoria.
         if (S.role === 'athlete') {
           const refreshed = await refreshAthleteSession();
-          if (refreshed) return sbFetch(path, options);
+          if (refreshed) return sbFetch(path, options, true);
         } else {
           const ok = await coachSignIn();
-          if (ok) return sbFetch(path, options);
+          if (ok) return sbFetch(path, options, true);
         }
       }
       if (res.status === 401 || res.status === 403) SB_STATUS = 'auth';
@@ -2736,6 +2745,13 @@ function buildPin() {
     const status = await fetchCoachStatus();
     S.coachEmail = null;
     if (status === 'approved') { S.role = 'coach'; S.tab = 0; fetchPendingCoachCount(); renderAsync(); }
+    else if (status === null) {
+      // No se pudo leer el estado (red caída o timeout): devolvemos el botón
+      // en vez de dejarlo colgado en "Entrando…".
+      S.pinError = true;
+      submit.disabled = false; submit.textContent = 'Entrar';
+      render();
+    }
     else { S.role = 'coach_pending'; S.coachStatus = status; render(); }
   };
 
@@ -2783,7 +2799,7 @@ function buildPin() {
       submit.disabled = true; submit.textContent = 'Entrando\u2026';
       const ok = await coachSignIn((email.value || '').trim(), pass.value);
       if (ok) { S.pinError = false; await routeAfterAuth(); }
-      else { S.pinError = true; render(); }
+      else { S.pinError = true; submit.disabled = false; submit.textContent = 'Entrar'; render(); }
     };
     submit.onclick = doLogin;
     pass.onkeydown = (e) => { if (e.key === 'Enter') doLogin(); };
