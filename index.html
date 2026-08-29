@@ -762,6 +762,7 @@ const SUPABASE_URL = 'https://skblkxwaxnefycgrqeyt.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Wc-Lo4L8ZPZ_OOg1F8iVVg_vWPEabtn'; // clave pública (terrassanatacio) — diseñada para ir en el cliente
 
 let SB_STATUS = 'ok'; // 'ok' | 'nokey' | 'auth' | 'offline'
+let SB_LAST_ERROR = ''; // texto del último error devuelto por PostgREST
 
 // --- Sesión de coach (Supabase Auth) para que las policies RLS de escritura reconozcan auth.uid() ---
 let SB_ACCESS_TOKEN = null; // no restauramos token viejo al arrancar: caducaría y daría un 401 falso ("clave revocada"). El coach re-loguea por sesión.
@@ -897,7 +898,13 @@ async function sbFetch(path, options, _retry) {
           if (ok) return sbFetch(path, options, true);
         }
       }
-      if (res.status === 401 || res.status === 403) SB_STATUS = 'auth';
+      // Un 403 de PostgREST suele ser una regla de negocio (trigger/RLS)
+      // rechazando la operación, no una clave revocada. Marcar 'auth' aquí
+      // pintaba el cartel rojo "clave no válida" cada vez que un trigger
+      // rechazaba una inscripción, que es un mensaje falso y alarmante.
+      // Guardamos el motivo real para que quien llama lo pueda mostrar.
+      SB_LAST_ERROR = err || '';
+      if (res.status === 401) SB_STATUS = 'auth';
       return null;
     }
     SB_STATUS = 'ok';
@@ -5742,7 +5749,17 @@ function buildAthleteInscripcions() {
     if (S.inscSel.length === 0 && mine.length === 0) { btn.textContent = 'Elige al menos una prueba'; setTimeout(function(){ btn.textContent = 'Enviar inscripción'; }, 1600); return; }
     btn.disabled = true; btn.textContent = 'Guardando…';
     dbSaveInscription(comp.id, athlete.id, S.inscSel).then(function(res){
-      if (!res.ok) { btn.disabled = false; btn.textContent = 'Error — reintenta'; return; }
+      if (!res.ok) {
+        // Mostrar el motivo real que devuelve el trigger check_inscription
+        // en vez de un "Error" genérico que no dice nada.
+        var motivo = 'Error — reintenta';
+        if (SB_LAST_ERROR.indexOf('INSCRIPCIO_TANCADA') !== -1) motivo = 'Inscripción cerrada';
+        else if (SB_LAST_ERROR.indexOf('MAXIM_PROVES') !== -1) motivo = 'Máximo de pruebas alcanzado';
+        else if (SB_STATUS === 'offline') motivo = 'Sin conexión — reintenta';
+        btn.disabled = false; btn.textContent = motivo;
+        setTimeout(function(){ btn.textContent = 'Enviar inscripción'; }, 3000);
+        return;
+      }
       dbGetInscriptions().then(function(rows){ DATA.inscriptions = rows; render(); });
     });
   };
