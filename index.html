@@ -871,6 +871,67 @@ async function refreshAthleteSession() {
   }
 }
 
+// ============================================================
+// ANALYTICS — eventos de producto: uso, fricción y bugs.
+// Va todo a la tabla app_events (Supabase). Nunca debe romper la app:
+// cualquier fallo de red o de la propia analítica se traga en silencio.
+// ============================================================
+const SESSION_ID = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random());
+let LAST_TRACKED_SCREEN = null;
+
+function track(eventName, meta) {
+  try {
+    fetch(SUPABASE_URL + '/rest/v1/app_events', {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': 'Bearer ' + (SB_ACCESS_TOKEN || SUPABASE_KEY),
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({
+        session_id: SESSION_ID,
+        role: (typeof S !== 'undefined' && S.role) || null,
+        event_name: eventName,
+        screen: LAST_TRACKED_SCREEN,
+        meta: meta || {}
+      })
+    }).catch(function(){});
+  } catch (e) {}
+}
+
+// Llamar en cada render() cuando cambia de pantalla. Sirve para saber
+// cuánta gente entra y por dónde navega, sin instrumentar pantalla por pantalla.
+function trackScreen(name) {
+  if (name === LAST_TRACKED_SCREEN) return;
+  LAST_TRACKED_SCREEN = name;
+  track('screen_view', {});
+}
+
+// Bugs reales antes de que los reporte un cliente: errores JS no controlados
+window.addEventListener('error', function(e) {
+  track('js_error', { message: e.message, source: e.filename, line: e.lineno });
+});
+window.addEventListener('unhandledrejection', function(e) {
+  track('promise_rejection', { reason: String((e.reason && e.reason.message) || e.reason) });
+});
+
+// "Dónde se encalla": 3+ toques en el mismo botón en menos de 800ms
+// es la señal más barata de que algo no respondió como esperaba el usuario.
+(function() {
+  let rageTarget = null, rageCount = 0, rageTimer = null;
+  document.addEventListener('click', function(e) {
+    const el = e.target.closest && e.target.closest('button, a, [role="button"]');
+    if (!el) return;
+    if (el === rageTarget) { rageCount++; } else { rageTarget = el; rageCount = 1; }
+    clearTimeout(rageTimer);
+    rageTimer = setTimeout(function(){ rageTarget = null; rageCount = 0; }, 800);
+    if (rageCount === 3) {
+      track('rage_click', { text: (el.textContent || '').trim().slice(0, 40) });
+    }
+  }, true);
+})();
+
 async function sbFetch(path, options, _retry) {
   if (SUPABASE_KEY.indexOf('PEGA_AQUI') === 0) { SB_STATUS = 'nokey'; return null; }
   const url = SUPABASE_URL + '/rest/v1/' + path;
@@ -884,6 +945,7 @@ async function sbFetch(path, options, _retry) {
     const res = await fetch(url, { ...options, headers: { ...headers, ...(options && options.headers || {}) } });
     if (!res.ok) {
       const err = await res.text(); console.error('SB error', path, err);
+      track('api_error', { path: path, status: res.status });
       // Un solo reintento: sin este tope, un 401 persistente hacía
       // sbFetch -> login -> sbFetch -> login... en bucle infinito y la
       // pantalla se quedaba colgada en "Entrando…" sin ningún error.
@@ -1076,7 +1138,7 @@ async function dbSaveSession(date, slot, sessObj) {
       pullText: sessObj.pullText || '', pushText: sessObj.pushText || '', lowerText: sessObj.lowerText || ''
     }
   };
-  const res = await sbFetch('sessions?on_conflict=date,slot', {
+  const res = await sbFetch('sessions?on_conflict=coach_id,date,slot', {
     method: 'POST',
     prefer: 'resolution=merge-duplicates,return=representation',
     body: JSON.stringify(body)
@@ -2416,14 +2478,15 @@ function render() {
   const sbBanner = buildSbBanner();
   if (sbBanner) app.appendChild(sbBanner);
 
-  if (!S.role) { app.appendChild(buildLogin()); return; }
+  if (!S.role) { trackScreen('login'); app.appendChild(buildLogin()); return; }
   if (S.role === 'pin') {
+    trackScreen('pin');
     app.appendChild(buildPin());
     if (S.showConfirmEmailModal) app.appendChild(buildConfirmEmailModal());
     return;
   }
-  if (S.role === 'athlete_pin') { app.appendChild(buildAthletePin()); return; }
-  if (S.role === 'coach_pending') { app.appendChild(buildCoachPending()); return; }
+  if (S.role === 'athlete_pin') { trackScreen('athlete_pin'); app.appendChild(buildAthletePin()); return; }
+  if (S.role === 'coach_pending') { trackScreen('coach_pending'); app.appendChild(buildCoachPending()); return; }
 
   app.appendChild(buildHeader());
   const content = document.createElement('div');
@@ -2432,10 +2495,14 @@ function render() {
   if (S.role === 'coach') {
     // La navegación vive solo en el menú inferior; aquí ya no se pinta la fila de tabs.
     const views = [buildCoachSession, buildCoachRPE, buildCoachSquad, buildCalendar, buildCoachInscripcions, buildCoachTeam, buildCoachHistorial, buildCoachAttendance];
-    content.appendChild(views[S.tab]());
+    const view = views[S.tab];
+    trackScreen(view.name);
+    content.appendChild(view());
   } else {
     const views = [buildAthleteInicio, buildAthleteRPE, buildAthleteStrength, buildCalendar, buildAthleteInscripcions, buildAthleteSession];
-    content.appendChild(views[S.ath_tab]());
+    const view = views[S.ath_tab];
+    trackScreen(view.name);
+    content.appendChild(view());
   }
 
   app.appendChild(content);
@@ -2705,13 +2772,31 @@ function buildPin() {
   h2.textContent = isSignup ? 'Crear cuenta de entrenador' : 'Acceso Entrenador';
   card.appendChild(h2);
 
+  if (isSignup) {
+    const googleBtn = document.createElement('button');
+    googleBtn.type = 'button';
+    googleBtn.className = 'btn btn-secondary';
+    googleBtn.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:10px;margin-top:14px;box-shadow:0 14px 30px rgba(60,110,160,0.32), inset 0 1.5px 0 rgba(255,255,255,0.95), inset 0 -10px 14px rgba(120,170,210,0.18);';
+    googleBtn.innerHTML =
+      '<svg width="18" height="18" viewBox="0 0 48 48" style="flex-shrink:0;">' +
+      '<path fill="#FFC107" d="M43.6 20.5h-1.9V20H24v8h11.3c-1.6 4.7-6.1 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.5 6.1 29.5 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.7-.4-3.5z"/>' +
+      '<path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 16 19 13 24 13c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.5 6.1 29.5 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>' +
+      '<path fill="#4CAF50" d="M24 44c5.4 0 10.3-2.1 14-5.5l-6.5-5.4C29.5 34.9 26.9 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.6 5C9.6 39.6 16.3 44 24 44z"/>' +
+      '<path fill="#1976D2" d="M43.6 20.5H24v8h11.3c-.8 2.3-2.3 4.3-4.2 5.6l6.5 5.4C41.4 36.6 44 30.9 44 24c0-1.3-.1-2.7-.4-3.5z"/>' +
+      '</svg> Registrarme con Google';
+    googleBtn.onclick = () => {
+      window.location.href = SUPABASE_URL + '/auth/v1/authorize?provider=google&redirect_to=' + encodeURIComponent(window.location.origin + window.location.pathname);
+    };
+    card.appendChild(googleBtn);
+  }
+
   const glassBg = 'background: linear-gradient(180deg, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0) 42%), linear-gradient(160deg, rgba(255,255,255,0.4) 0%, rgba(210,230,245,0.28) 60%, rgba(180,215,240,0.3) 100%);';
 
   const email = document.createElement('input');
   email.type = 'email'; email.placeholder = 'Email'; email.autocomplete = 'username';
   email.className = 'select-styled';
   email.value = (S.coachEmail != null) ? S.coachEmail : '';
-  email.style.cssText = glassBg;
+  email.style.cssText = glassBg + (isSignup ? 'margin-top:14px;' : '');
   email.oninput = () => { S.coachEmail = email.value; };
   card.appendChild(email);
 
@@ -5990,7 +6075,20 @@ function buildResultsSheet() {
 // SEED DATA — Semana 2-8 Junio 2026
 // ============================================================
 function seedDemoData() { /* disabled — data lives in Supabase */ }
+function checkGoogleRedirect() {
+  if (window.location.hash.includes('access_token')) {
+    const params = new URLSearchParams(window.location.hash.substring(1));
+    const token = params.get('access_token');
+    if (token) {
+      SB_ACCESS_TOKEN = token;
+      history.replaceState(null, '', window.location.pathname);
+    }
+  }
+}
+
 seedDemoData();
+checkGoogleRedirect();
+track('session_start', {});
 renderAsync();
 </script>
 </body>
