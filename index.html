@@ -6600,6 +6600,18 @@ function checkGoogleRedirect() {
 }
 
 seedDemoData();
+// iOS a veces reanuda la app (en vez de recargarla) con el teclado
+// de un input viejo todavía abierto. Se lo sacamos apenas se vuelve a mostrar.
+function blurStaleFocus() {
+  const el = document.activeElement;
+  if (el && el !== document.body && typeof el.blur === 'function') el.blur();
+}
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'visible') blurStaleFocus();
+});
+window.addEventListener('pageshow', blurStaleFocus);
+blurStaleFocus();
+
 checkGoogleRedirect();
 track('session_start', {});
 renderAsync();
