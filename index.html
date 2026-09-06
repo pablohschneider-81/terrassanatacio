@@ -6600,17 +6600,24 @@ function checkGoogleRedirect() {
 }
 
 seedDemoData();
-// iOS a veces reanuda la app (en vez de recargarla) con el teclado
-// de un input viejo todavía abierto. Se lo sacamos apenas se vuelve a mostrar.
-function blurStaleFocus() {
-  const el = document.activeElement;
-  if (el && el !== document.body && typeof el.blur === 'function') el.blur();
-}
-document.addEventListener('visibilitychange', function() {
-  if (document.visibilityState === 'visible') blurStaleFocus();
-});
-window.addEventListener('pageshow', blurStaleFocus);
-blurStaleFocus();
+// Solo en modo standalone (abierto desde el ícono, no desde Safari) iOS a veces
+// restaura el foco/teclado de la última vez que se usó la app, ANTES de que el
+// usuario toque nada. Un timer no lo puede ganar de forma confiable porque no
+// sabemos cuándo lo va a hacer iOS. En cambio: cualquier foco que aparezca
+// antes del primer toque real del usuario se cancela al instante, sin importar
+// el momento — apenas el usuario toca algo de verdad, el guardia se desactiva
+// solo y el resto de la app funciona 100% normal.
+(function() {
+  let userInteracted = false;
+  const markInteracted = function() { userInteracted = true; };
+  document.addEventListener('touchstart', markInteracted, { once: true, passive: true, capture: true });
+  document.addEventListener('mousedown', markInteracted, { once: true, passive: true, capture: true });
+  document.addEventListener('focusin', function(e) {
+    if (!userInteracted && e.target && e.target !== document.body && typeof e.target.blur === 'function') {
+      e.target.blur();
+    }
+  }, true);
+})();
 
 checkGoogleRedirect();
 track('session_start', {});
