@@ -3725,9 +3725,13 @@ function buildCoachSession() {
       if (m) mstat.textContent = '→ ' + m;
       d.appendChild(mstat);
     });
-    // Volume breakdown
+    // Volume breakdown — el contenedor se crea SIEMPRE (aunque arranque vacío),
+    // para que updateMeters() lo pueda ir llenando en vivo sin esperar a un
+    // re-render completo de la pantalla (que solo pasa al salir y volver a entrar).
+    const volWrap = document.createElement('div'); volWrap.id = 'total-meters-div';
     const volBlock = buildVolumeBlock({ phase: S.sessionPhase, warmUp: S.warmUp, preSet: S.preSet, mainSet: S.mainSet, mainSetFondo: S.mainSetFondo, coolDown: S.coolDown }, '');
-    if (volBlock) { volBlock.id = 'total-meters-div'; d.appendChild(volBlock); }
+    if (volBlock) volWrap.appendChild(volBlock);
+    d.appendChild(volWrap);
   }
 
   // Pack días
@@ -3829,8 +3833,9 @@ function updateMeters(container) {
   });
   const tmDiv = container.querySelector('#total-meters-div');
   if (tmDiv) {
+    tmDiv.innerHTML = '';
     const newBlock = buildVolumeBlock({ phase: S.sessionPhase, warmUp: S.warmUp, preSet: S.preSet, mainSet: S.mainSet, mainSetFondo: S.mainSetFondo, coolDown: S.coolDown }, '');
-    if (newBlock) { newBlock.id = 'total-meters-div'; tmDiv.replaceWith(newBlock); }
+    if (newBlock) tmDiv.appendChild(newBlock);
   }
 }
 
