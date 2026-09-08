@@ -1009,7 +1009,7 @@ async function dbGetAthletes() {
   let rows;
   if (S.role === 'coach') {
     // El coach lee los suyos por RLS (la vista respeta el aislamiento por coach_id)
-    rows = await sbFetch('athletes_directory?select=id,name,morning_days,has_pin&order=name');
+    rows = await sbFetch('athletes_directory?select=id,name,morning_days,has_pin,birth_date,consent_on_file,consent_note&order=name');
   } else {
     // Nadador (o pantalla de login): la lista se obtiene con el código de equipo,
     // vía Edge Function con rate-limit por IP (antes era un RPC público sin
@@ -1866,6 +1866,10 @@ async function renderAsync() {
 function todayStr() {
   const d = new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
+function yesterdayStr() {
+  const d = new Date(); d.setDate(d.getDate() - 1);
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
 function dateObj(s) { return new Date(s + 'T12:00:00'); }
 function formatDateLabel(s) {
   const d = dateObj(s); return DAYS_ES[d.getDay()] + ' ' + d.getDate() + ' ' + MONTHS_ES[d.getMonth()];
@@ -1922,9 +1926,17 @@ function volumeBreakdown(session) {
 function buildVolumeBlock(session, prefix) {
   var vb = volumeBreakdown(session);
   if (!vb) return null;
-  if (!vb.hasGrupo && !vb.hasFondo) return null;
   var wrap = document.createElement('div');
   wrap.style.marginTop = '10px';
+  if (!vb.hasGrupo && !vb.hasFondo) {
+    // Sin ningún main set cargado todavía: si igual hay metros (calentamiento,
+    // pre-set o vuelta a la calma), mostrar un total único en vez de ocultarlo.
+    if (vb.grupo <= 0) return null;
+    var rowT = document.createElement('div'); rowT.className = 'total-meters';
+    rowT.innerHTML = '<span>' + (prefix || '') + 'Volumen</span><span style="font-weight:700;color:var(--accent2)">' + vb.grupo + ' m</span>';
+    wrap.appendChild(rowT);
+    return wrap;
+  }
   if (vb.hasGrupo) {
     var rowG = document.createElement('div'); rowG.className = 'total-meters'; rowG.style.marginBottom = '4px';
     rowG.innerHTML = '<span>' + (prefix || '') + 'Vol. Grupo</span><span style="font-weight:700;color:var(--accent2)">' + vb.grupo + ' m</span>';
@@ -2571,6 +2583,7 @@ function render() {
   const sbBanner = buildSbBanner();
   if (sbBanner) app.appendChild(sbBanner);
 
+  if (S.showResetScreen) { trackScreen('reset_password'); app.appendChild(buildResetPasswordScreen()); return; }
   if (!S.role) { trackScreen('login'); app.appendChild(buildLogin()); return; }
   if (S.role === 'pin') {
     trackScreen('pin');
@@ -2993,12 +3006,136 @@ function buildPin() {
   }
   card.appendChild(submit);
 
+  if (!isSignup) {
+    const forgot = document.createElement('button');
+    forgot.className = 'btn-link';
+    forgot.style.cssText = 'display:block;margin:10px auto 0;background:none;border:none;color:var(--accent2);font-size:0.82rem;text-decoration:underline;cursor:pointer;';
+    forgot.textContent = '\u00bfOlvidaste tu contrase\u00f1a?';
+    forgot.onclick = () => { S.showForgotPassword = true; S.forgotSent = false; S.forgotError = null; render(); };
+    card.appendChild(forgot);
+  }
+
   const toggle = document.createElement('button');
   toggle.className = 'btn btn-secondary';
   toggle.style.marginTop = '10px';
   toggle.textContent = isSignup ? 'Ya tengo cuenta' : '\u00bfEres nuevo? Crear cuenta';
   toggle.onclick = () => { S.pinMode = isSignup ? 'login' : 'signup'; S.pinError = false; S.signupError = null; render(); };
   card.appendChild(toggle);
+
+  d.appendChild(card);
+  if (S.showForgotPassword) d.appendChild(buildForgotPasswordModal());
+  return d;
+}
+
+function buildForgotPasswordModal() {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(26,42,58,0.5); backdrop-filter:blur(4px);';
+  const card = document.createElement('div');
+  card.className = 'login-card';
+  card.style.cssText += 'max-width:380px; width:100%; margin:auto; text-align:left;';
+
+  const h3 = document.createElement('h2'); h3.style.cssText = 'text-align:center';
+  h3.textContent = 'Recuperar contrase\u00f1a';
+  card.appendChild(h3);
+
+  if (S.forgotSent) {
+    const msg = document.createElement('p'); msg.style.cssText = 'font-size:0.88rem;text-align:center;color:var(--text2)';
+    msg.textContent = 'Si ese email existe en Ondrift, te mandamos un link para poner una contrase\u00f1a nueva. Revis\u00e1 tu correo (y la carpeta de spam).';
+    card.appendChild(msg);
+  } else {
+    const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = 'Tu email de coach';
+    card.appendChild(lbl);
+    const emailIn = document.createElement('input'); emailIn.type = 'email'; emailIn.placeholder = 'nombre@correo.com';
+    emailIn.oninput = (e) => { S._forgotEmail = e.target.value; };
+    card.appendChild(emailIn);
+    if (S.forgotError) {
+      const err = document.createElement('div'); err.style.cssText = 'color:var(--red);font-size:0.82rem;margin-top:6px';
+      err.textContent = S.forgotError;
+      card.appendChild(err);
+    }
+    const sendBtn = document.createElement('button'); sendBtn.className = 'btn btn-primary'; sendBtn.style.marginTop = '12px';
+    sendBtn.textContent = 'Mandar link de recuperaci\u00f3n';
+    sendBtn.onclick = async () => {
+      const em = (S._forgotEmail || '').trim();
+      if (!em || !em.includes('@')) { S.forgotError = 'Poné un email válido.'; render(); return; }
+      sendBtn.disabled = true; sendBtn.textContent = 'Enviando\u2026';
+      try {
+        await fetch(SUPABASE_URL + '/auth/v1/recover', {
+          method: 'POST',
+          headers: { 'apikey': SUPABASE_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: em, redirect_to: window.location.origin + window.location.pathname })
+        });
+      } catch (e) {}
+      S.forgotSent = true; render();
+    };
+    card.appendChild(sendBtn);
+  }
+
+  const closeBtn = document.createElement('button'); closeBtn.className = 'btn btn-secondary'; closeBtn.style.marginTop = '10px';
+  closeBtn.textContent = 'Cerrar';
+  closeBtn.onclick = () => { S.showForgotPassword = false; render(); };
+  card.appendChild(closeBtn);
+
+  ov.appendChild(card);
+  return ov;
+}
+
+// Pantalla para poner la contraseña nueva, cuando se vuelve del link del mail
+function buildResetPasswordScreen() {
+  const d = document.createElement('div'); d.className = 'login-screen';
+  const card = document.createElement('div'); card.className = 'login-card';
+
+  const h2 = document.createElement('h2'); h2.style.textAlign = 'center'; h2.textContent = 'Nueva contrase\u00f1a';
+  card.appendChild(h2);
+
+  const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = 'Contrase\u00f1a nueva';
+  card.appendChild(lbl);
+  const p1 = document.createElement('input'); p1.type = 'password'; p1.placeholder = 'M\u00ednimo 6 caracteres';
+  p1.oninput = (e) => { S._resetPass1 = e.target.value; };
+  card.appendChild(p1);
+
+  const lbl2 = document.createElement('label'); lbl2.className = 'field-label'; lbl2.style.marginTop = '10px'; lbl2.textContent = 'Repetila';
+  card.appendChild(lbl2);
+  const p2 = document.createElement('input'); p2.type = 'password'; p2.placeholder = 'Repetir contrase\u00f1a';
+  p2.oninput = (e) => { S._resetPass2 = e.target.value; };
+  card.appendChild(p2);
+
+  if (S.resetError) {
+    const err = document.createElement('div'); err.style.cssText = 'color:var(--red);font-size:0.82rem;margin-top:8px';
+    err.textContent = S.resetError;
+    card.appendChild(err);
+  }
+
+  const btn = document.createElement('button'); btn.className = 'btn btn-primary'; btn.style.marginTop = '12px';
+  btn.textContent = 'Guardar contrase\u00f1a';
+  btn.onclick = async () => {
+    const p = S._resetPass1 || '', p2v = S._resetPass2 || '';
+    if (p.length < 6) { S.resetError = 'La contrase\u00f1a tiene que tener al menos 6 caracteres.'; render(); return; }
+    if (p !== p2v) { S.resetError = 'Las dos contrase\u00f1as no coinciden.'; render(); return; }
+    btn.disabled = true; btn.textContent = 'Guardando\u2026';
+    try {
+      const res = await fetch(SUPABASE_URL + '/auth/v1/user', {
+        method: 'PUT',
+        headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + S.recoveryToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: p })
+      });
+      if (!res.ok) { S.resetError = 'No se pudo guardar. Probá pedir el link de nuevo.'; btn.disabled = false; btn.textContent = 'Guardar contrase\u00f1a'; render(); return; }
+      S.recoveryToken = null; S.resetDone = true; render();
+    } catch (e) {
+      S.resetError = 'Sin conexi\u00f3n.'; btn.disabled = false; btn.textContent = 'Guardar contrase\u00f1a'; render();
+    }
+  };
+  card.appendChild(btn);
+
+  if (S.resetDone) {
+    const ok = document.createElement('p'); ok.style.cssText = 'color:var(--green);text-align:center;margin-top:12px;font-weight:700';
+    ok.textContent = '\u2713 Contrase\u00f1a actualizada. Ya pod\u00e9s entrar con ella.';
+    card.appendChild(ok);
+    const goBtn = document.createElement('button'); goBtn.className = 'btn btn-secondary'; goBtn.style.marginTop = '10px';
+    goBtn.textContent = 'Ir al login';
+    goBtn.onclick = () => { S.showResetScreen = false; render(); };
+    card.appendChild(goBtn);
+  }
 
   d.appendChild(card);
   return d;
@@ -5577,15 +5714,31 @@ function buildAthleteRPE() {
   const d = document.createElement('div');
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'MI RPE';
   d.appendChild(st);
+
+  // Selector Hoy / Ayer — solo estos dos, para no dejar cargar RPE de días viejos
+  // (pierde precisión como recuerdo, y puede maquillar el ACWR reciente).
   const today = todayStr();
-  const rawSession = getSession(today);
+  const yesterday = yesterdayStr();
+  if (!S.rpeDate) S.rpeDate = today;
+  const dateTabs = document.createElement('div'); dateTabs.className = 'pack-toggle'; dateTabs.style.marginBottom = '10px';
+  [[today, 'Hoy'], [yesterday, 'Ayer']].forEach(function(pair) {
+    const btn = document.createElement('button');
+    btn.className = 'pack-btn' + (S.rpeDate === pair[0] ? ' active' : '');
+    btn.textContent = pair[1];
+    btn.onclick = function() { S.rpeDate = pair[0]; S.rpeSlot = null; S.rpeSelected = null; S.fatigueSelected = null; S.rpeNote = ''; render(); };
+    dateTabs.appendChild(btn);
+  });
+  d.appendChild(dateTabs);
+
+  const rpeDate = S.rpeDate;
+  const rawSession = getSession(rpeDate);
   const slots = daySlots(rawSession);
   const double = slots.length > 1;
 
   // Determine active slot: S.rpeSlot ('am'|'pm'), default first un-submitted
-  const entry = normRPE(getDayRPE(today)[S.athleteName]) || { am: null, pm: null };
-  const queuedAM = findQueuedRPE(today, 'am', S.athleteName);
-  const queuedPM = findQueuedRPE(today, 'pm', S.athleteName);
+  const entry = normRPE(getDayRPE(rpeDate)[S.athleteName]) || { am: null, pm: null };
+  const queuedAM = findQueuedRPE(rpeDate, 'am', S.athleteName);
+  const queuedPM = findQueuedRPE(rpeDate, 'pm', S.athleteName);
   // Lo que está en cola (aún no confirmado por el servidor) cuenta como "enviado"
   // para la UI: evita que el atleta lo cargue dos veces mientras no hay red.
   if (queuedAM && !entry.am) { entry.am = { rpe: queuedAM.rpe, fatigue: queuedAM.fatigue, pending: true }; }
@@ -5606,7 +5759,7 @@ function buildAthleteRPE() {
         + '<div class="card-sub">RPE objetivo: <strong>' + s.sess.targetRPE + '</strong></div>';
     }).join('<div style="height:6px"></div>');
   } else {
-    sessionCard.innerHTML = '<div class="card-sub" style="text-align:center">Sin sesión para hoy</div>';
+    sessionCard.innerHTML = '<div class="card-sub" style="text-align:center">Sin sesión ' + (rpeDate === today ? 'para hoy' : 'para ayer') + '</div>';
   }
   d.appendChild(sessionCard);
 
@@ -5632,7 +5785,7 @@ function buildAthleteRPE() {
       ? '<div style="margin-top:10px;font-size:0.74rem;color:#f39c12;font-weight:700">⏳ Guardado en el dispositivo — se enviará solo cuando vuelva la conexión</div>'
       : '';
     const cs = document.createElement('div'); cs.className = 'confirm-screen';
-    cs.innerHTML = '<div class="confirm-emoji">✅</div><div class="confirm-rpe" style="color:' + rpeColor(slotEntry.rpe) + '">' + slotEntry.rpe + '</div><div class="confirm-label">RPE registrado · <span style="color:' + fat.color + '">' + fat.label + '</span></div><div style="margin-top:20px;font-size:0.8rem;color:var(--text2)">Ya registraste tu RPE' + (double ? ' de este turno' : ' hoy') + '</div>' + pendingNote;
+    cs.innerHTML = '<div class="confirm-emoji">✅</div><div class="confirm-rpe" style="color:' + rpeColor(slotEntry.rpe) + '">' + slotEntry.rpe + '</div><div class="confirm-label">RPE registrado · <span style="color:' + fat.color + '">' + fat.label + '</span></div><div style="margin-top:20px;font-size:0.8rem;color:var(--text2)">Ya registraste tu RPE' + (double ? ' de este turno' : (rpeDate === today ? ' hoy' : ' de ayer')) + '</div>' + pendingNote;
     d.appendChild(cs);
     return d;
   }
@@ -5691,11 +5844,11 @@ function buildAthleteRPE() {
     const slotKey = double ? S.rpeSlot : 'am';
     const btnLabel = submitBtn.textContent;
     submitBtn.disabled = true; submitBtn.textContent = 'Guardando…';
-    dbSaveRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote).then(function(res) {
+    dbSaveRPE(rpeDate, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote).then(function(res) {
       if (!res) {
         if (SB_STATUS === 'offline') {
           // Sin red: no se pierde. Se guarda en el dispositivo y se reenvía solo al reconectar.
-          queueRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote);
+          queueRPE(rpeDate, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote);
           S.rpeSubmitted = true;
           render();
           return;
@@ -5711,7 +5864,7 @@ function buildAthleteRPE() {
       renderAsync();
     }).catch(function() {
       // fetch tiró excepción (típico de estar realmente offline): mismo tratamiento que arriba
-      queueRPE(today, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote);
+      queueRPE(rpeDate, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote);
       S.rpeSubmitted = true;
       render();
     });
@@ -6289,7 +6442,7 @@ function buildAthleteInscripcions() {
     msg.className = 'card';
     msg.style.cssText = 'padding:16px;font-size:0.88rem;color:var(--text2);line-height:1.5';
     msg.innerHTML = st === 'before'
-      ? 'Todavía no puedes inscribirte. La inscripción se abre <b style="color:var(--text)">20 días antes</b> de la competición y dura <b style="color:var(--text)">5 días</b>.'
+      ? 'Todavía no puedes inscribirte. La inscripción se abre <b style="color:var(--text)">25 días antes</b> de la competición y cierra <b style="color:var(--text)">8 días antes</b>.'
       : 'El plazo ha finalizado. Si necesitas un cambio, habla con el entrenador.';
     d.appendChild(msg);
     if (mine.length > 0) {
@@ -6376,7 +6529,7 @@ function buildCoachInscripcions() {
 
   if (comps.length === 0) {
     const empty = document.createElement('div'); empty.className = 'empty-state';
-    empty.innerHTML = 'No hay competiciones próximas.<br>Añade una en el calendario: la ventana de inscripción se calcula sola (abre 20 días antes, dura 5).';
+    empty.innerHTML = 'No hay competiciones próximas.<br>Añade una en el calendario: la ventana de inscripción se calcula sola (abre 25 días antes, cierra 8 días antes).';
     d.appendChild(empty);
     return d;
   }
@@ -6592,7 +6745,12 @@ function checkGoogleRedirect() {
   if (window.location.hash.includes('access_token')) {
     const params = new URLSearchParams(window.location.hash.substring(1));
     const token = params.get('access_token');
-    if (token) {
+    const type = params.get('type');
+    if (token && type === 'recovery') {
+      S.recoveryToken = token;
+      S.showResetScreen = true;
+      history.replaceState(null, '', window.location.pathname);
+    } else if (token) {
       SB_ACCESS_TOKEN = token;
       history.replaceState(null, '', window.location.pathname);
     }
