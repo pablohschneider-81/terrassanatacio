@@ -3046,6 +3046,7 @@ function buildForgotPasswordModal() {
     const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = 'Tu email de coach';
     card.appendChild(lbl);
     const emailIn = document.createElement('input'); emailIn.type = 'email'; emailIn.placeholder = 'nombre@correo.com';
+    emailIn.style.cssText = 'width:100%;box-sizing:border-box;';
     emailIn.oninput = (e) => { S._forgotEmail = e.target.value; };
     card.appendChild(emailIn);
     if (S.forgotError) {
@@ -3091,12 +3092,14 @@ function buildResetPasswordScreen() {
   const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = 'Contrase\u00f1a nueva';
   card.appendChild(lbl);
   const p1 = document.createElement('input'); p1.type = 'password'; p1.placeholder = 'M\u00ednimo 6 caracteres';
+  p1.style.cssText = 'width:100%;box-sizing:border-box;';
   p1.oninput = (e) => { S._resetPass1 = e.target.value; };
   card.appendChild(p1);
 
   const lbl2 = document.createElement('label'); lbl2.className = 'field-label'; lbl2.style.marginTop = '10px'; lbl2.textContent = 'Repetila';
   card.appendChild(lbl2);
   const p2 = document.createElement('input'); p2.type = 'password'; p2.placeholder = 'Repetir contrase\u00f1a';
+  p2.style.cssText = 'width:100%;box-sizing:border-box;';
   p2.oninput = (e) => { S._resetPass2 = e.target.value; };
   card.appendChild(p2);
 
