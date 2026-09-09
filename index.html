@@ -2335,7 +2335,12 @@ function buildCoachStrength() {
   const R = S.coachStrReps, r = S.coachStrRir;
 
   (DATA.coachStrAthletes || []).forEach(function (a) {
-    const bw = DATA.coachStrBw[a.id];
+    const bwSaved = DATA.coachStrBw[a.id];
+    const bwTyped = S.coachStrBwInput[a.id];
+    // Mientras escribís el peso, se usa YA para el cálculo (falta peso / 1RM / sugerido)
+    // sin esperar a que toques "kg" — ese botón solo lo deja guardado para la próxima vez.
+    const bwHasTyped = bwTyped !== undefined && bwTyped !== '' && !isNaN(Number(bwTyped));
+    const bw = bwHasTyped ? Number(bwTyped) : bwSaved;
     const card = document.createElement('div'); card.className = 'card'; card.style.marginBottom = '12px';
 
     // cabecera + peso corporal
@@ -2345,8 +2350,9 @@ function buildCoachStrength() {
     const bwWrap = document.createElement('div'); bwWrap.style.cssText = 'display:flex;align-items:center;gap:6px';
     const bwIn = document.createElement('input'); bwIn.type = 'number'; bwIn.inputMode = 'decimal';
     bwIn.placeholder = 'peso'; bwIn.style.cssText = 'width:70px;text-align:right';
-    bwIn.value = (S.coachStrBwInput[a.id] !== undefined) ? S.coachStrBwInput[a.id] : (bw != null ? bw : '');
+    bwIn.value = (S.coachStrBwInput[a.id] !== undefined) ? S.coachStrBwInput[a.id] : (bwSaved != null ? bwSaved : '');
     bwIn.oninput = function (e) { S.coachStrBwInput[a.id] = e.target.value; };
+    bwIn.onblur = function () { render(); };
     const bwBtn = document.createElement('button'); bwBtn.className = 'btn'; bwBtn.textContent = 'kg';
     bwBtn.style.cssText = 'padding:8px 12px;min-width:auto';
     bwBtn.onclick = function () {
@@ -3032,7 +3038,7 @@ function buildForgotPasswordModal() {
   ov.style.cssText = 'position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(26,42,58,0.5); backdrop-filter:blur(4px);';
   const card = document.createElement('div');
   card.className = 'login-card';
-  card.style.cssText += 'max-width:380px; width:100%; margin:auto; text-align:left;';
+  card.style.cssText += 'max-width:440px; width:100%; margin:auto; text-align:left;';
 
   const h3 = document.createElement('h2'); h3.style.cssText = 'text-align:center';
   h3.textContent = 'Recuperar contrase\u00f1a';
