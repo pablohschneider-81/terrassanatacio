@@ -1261,6 +1261,68 @@ async function dbGetSessionAttendance(sessionId) {
   (rows || []).forEach(r => { map[r.athlete_id] = r.status; });
   return map;
 }
+
+// ── Export mensual (CSV crudo, sesión + asistencia por nadador) ───────────
+const ATT_LABEL_CSV = { present: 'Presente', absent: 'Ausente', justified: 'Justificada' };
+function csvEscape(v) {
+  v = (v === null || v === undefined) ? '' : String(v);
+  if (/[",;\n]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"';
+  return v;
+}
+function downloadCSV(rows, filename) {
+  const csv = rows.map(function(r) { return r.map(csvEscape).join(','); }).join('\r\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' }); // BOM: para que Excel abra bien tildes/ñ
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+}
+async function exportMonthCSV(ym, btn) {
+  const sessions = getAllSessions().filter(function(s) { return s.date.slice(0, 7) === ym; });
+  if (sessions.length === 0) { alert('No hay sesiones ese mes para exportar.'); return; }
+
+  const origLabel = btn ? btn.textContent : null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Generando…'; }
+
+  try {
+    const athleteName = {};
+    (DATA.athletes || []).forEach(function(a) { athleteName[a.id] = a.name; });
+
+    const entries = [];
+    sessions.forEach(function(s) {
+      daySlots(s.data).forEach(function(sl) { entries.push({ date: s.date, slot: sl.slot, sess: sl.sess }); });
+    });
+
+    const attMaps = await Promise.all(entries.map(function(e) {
+      return e.sess._id ? dbGetSessionAttendance(e.sess._id) : Promise.resolve({});
+    }));
+
+    const rows = [['Fecha', 'Turno', 'Título', 'Fase', 'RPE objetivo', 'Duración (min)', 'Nadador', 'Asistencia']];
+    entries.forEach(function(e, i) {
+      const sess = e.sess;
+      const attMap = attMaps[i];
+      const slotLabel = e.slot === 'am' ? 'Mañana' : (e.slot === 'pm' ? 'Tarde' : e.slot);
+      const base = [e.date, slotLabel, sess.title || 'Sin título', sess.phase || '',
+        (sess.targetRPE != null ? sess.targetRPE : ''), (sess.duration != null ? sess.duration : '')];
+      const ids = Object.keys(attMap);
+      if (ids.length === 0) {
+        rows.push(base.concat(['', 'Sin asistencia registrada']));
+      } else {
+        ids.forEach(function(aid) {
+          rows.push(base.concat([athleteName[aid] || aid, ATT_LABEL_CSV[attMap[aid]] || attMap[aid]]));
+        });
+      }
+    });
+
+    downloadCSV(rows, 'ondrift_' + ym + '.csv');
+  } catch (err) {
+    alert('Error al generar el export. Reintentá.');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+  }
+}
+
 async function dbSaveAttendanceBulk(sessionId, statusByAthleteId) {
   const body = Object.entries(statusByAthleteId).map(([athlete_id, status]) => ({
     athlete_id, session_id: sessionId, status
@@ -5155,6 +5217,13 @@ function buildCoachHistorial() {
   };
   nav.append(prevB, lbl, nextB);
   d.appendChild(nav);
+
+  // Exportar mes activo (CSV crudo: sesión + asistencia por nadador)
+  const exportBtn = document.createElement('button');
+  exportBtn.textContent = '⬇ Exportar mes (CSV)';
+  exportBtn.style.cssText = 'width:100%;padding:10px;margin-bottom:14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-weight:700;font-size:0.82rem;cursor:pointer';
+  exportBtn.onclick = function() { exportMonthCSV(S.histMonth, exportBtn); };
+  d.appendChild(exportBtn);
 
   // Filtrar sesiones del mes activo
   const sessions = getAllSessions().filter(function(s){ return s.date.slice(0,7) === S.histMonth; });
