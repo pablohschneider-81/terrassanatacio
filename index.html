@@ -1145,6 +1145,15 @@ async function dbSaveSession(date, slot, sessObj) {
   });
   delete _sessionCache[date];
   _allSessionsCache = null;
+  // Si la pestaña de Asistencia tiene cargada esta misma fecha, su copia en
+  // memoria (S._attSession, con el _id de sesión ya cerrado) quedó obsoleta:
+  // forzamos un refetch en el próximo render aunque S.attSelDate no cambie.
+  // Sin esto, "Cerrar sesión y guardar" puede enviar un session_id que ya
+  // no existe (o que apunta a la fila vieja) y Supabase lo rechaza por la
+  // foreign key attendance_session_id_fkey.
+  if (typeof S !== 'undefined' && S && S._attSessionDate === date) {
+    S._attSessionDate = null;
+  }
   return res; // null si falló, array si guardó
 }
 async function dbGetAllSessions(weeks) {
@@ -1457,6 +1466,12 @@ async function dbAddCompetition(comp) {
 async function dbDeleteSession(date) {
   await sbFetch('sessions?date=eq.' + date, { method: 'DELETE', prefer: 'return=minimal' });
   delete _sessionCache[date];
+  // Misma razón que en dbSaveSession: invalidar la copia en memoria de
+  // Asistencia si estaba mirando esta fecha, para no arrastrar un _id
+  // de sesión ya borrada.
+  if (typeof S !== 'undefined' && S && S._attSessionDate === date) {
+    S._attSessionDate = null;
+  }
   // NO anulamos _allSessionsCache: el llamador la actualiza en memoria para no perder meses cargados
 }
 async function dbSetInscWindow(compId, openDate, closeDate) {
@@ -3641,7 +3656,10 @@ function buildCoachSession() {
   d.appendChild(l2);
   const rpeIn = document.createElement('input');
   rpeIn.type = 'number'; rpeIn.min = 1; rpeIn.max = 10; rpeIn.value = S.sessionRPE;
-  rpeIn.oninput = e => { S.sessionRPE = parseInt(e.target.value) || 6; };
+  rpeIn.oninput = e => {
+    const v = parseInt(e.target.value);
+    S.sessionRPE = isNaN(v) ? 6 : Math.min(10, Math.max(1, v));
+  };
   d.appendChild(rpeIn);
 
   // Duración (min) — para sRPE = RPE × duración
@@ -3649,7 +3667,10 @@ function buildCoachSession() {
   d.appendChild(lDur);
   const durIn = document.createElement('input');
   durIn.type = 'number'; durIn.min = 10; durIn.max = 300; durIn.value = S.sessionDuration;
-  durIn.oninput = e => { S.sessionDuration = parseInt(e.target.value) || 80; };
+  durIn.oninput = e => {
+    const v = parseInt(e.target.value);
+    S.sessionDuration = isNaN(v) ? 80 : Math.min(300, Math.max(10, v));
+  };
   d.appendChild(durIn);
 
   // Phase
@@ -3779,6 +3800,11 @@ function buildCoachSession() {
   const pubBtn = document.createElement('button');
   pubBtn.className = 'btn btn-primary'; pubBtn.textContent = 'Publicar';
   pubBtn.onclick = function() {
+    // Defensa en profundidad: nunca dejar salir un RPE/duración fuera de rango
+    // hacia Supabase (los CHECK constraints de la tabla exigen RPE 1–10 y
+    // duración 10–300; si esto falla ahí, llega como 400 sin feedback claro).
+    S.sessionRPE = Math.min(10, Math.max(1, S.sessionRPE || 6));
+    S.sessionDuration = Math.min(300, Math.max(10, S.sessionDuration || 80));
     const session = {
       title: S.sessionTitle || 'Sin título',
       targetRPE: S.sessionRPE,
@@ -5042,11 +5068,26 @@ function buildCoachAttendance() {
       closeBtn.disabled = true; closeBtn.textContent = 'Guardando…';
       const finalMap = {};
       roster.forEach(function(a) { finalMap[a.id] = S.attDraft[slot][a.id] || 'present'; });
-      dbSaveAttendanceBulk(sessionId, finalMap).then(function(res) {
-        if (!res) { alert('Error al guardar. Reintentá.'); closeBtn.disabled = false; closeBtn.textContent = 'Cerrar sesión y guardar'; return; }
-        S.attDraft[slot] = finalMap;
-        S._attSaved = S._attSaved || {}; S._attSaved[slot] = true;
-        render();
+      // Reconfirmamos el id de sesión justo antes de guardar (bypaseando la
+      // caché) en vez de confiar en el `sessionId` capturado al abrir esta
+      // pantalla: si la sesión se editó/borró y se volvió a publicar desde
+      // otra pestaña o dispositivo mientras esta vista seguía abierta, ese
+      // id capturado puede ya no existir y Supabase rechaza el insert por
+      // la foreign key attendance_session_id_fkey con un 400 poco claro.
+      delete _sessionCache[S.attSelDate];
+      dbGetSession(S.attSelDate).then(function(freshSess) {
+        const freshId = freshSess && freshSess[slot] && freshSess[slot]._id;
+        if (!freshId) {
+          alert('Esta sesión ya no existe (fue editada o borrada desde otra pantalla). Recargá la pestaña de Asistencia e intentá de nuevo.');
+          closeBtn.disabled = false; closeBtn.textContent = 'Cerrar sesión y guardar';
+          return;
+        }
+        return dbSaveAttendanceBulk(freshId, finalMap).then(function(res) {
+          if (!res) { alert('Error al guardar. Reintentá.'); closeBtn.disabled = false; closeBtn.textContent = 'Cerrar sesión y guardar'; return; }
+          S.attDraft[slot] = finalMap;
+          S._attSaved = S._attSaved || {}; S._attSaved[slot] = true;
+          render();
+        });
       });
     };
     panel.appendChild(closeBtn);
@@ -5145,8 +5186,8 @@ function buildCoachHistorial() {
     // Cargar un slot concreto en el formulario de edición
     const loadSlotForEdit = function(slotData, slotKey) {
       S.sessionTitle = slotData.title || '';
-      S.sessionRPE = slotData.targetRPE || 6;
-      S.sessionDuration = slotData.duration || 80;
+      S.sessionRPE = Math.min(10, Math.max(1, slotData.targetRPE || 6));
+      S.sessionDuration = Math.min(300, Math.max(10, slotData.duration || 80));
       S.sessionPhase = slotData.phase || 'Ligero';
       S.sessionDate = s.date;
       S.alphaPhase = slotData.alphaPhase || null;
