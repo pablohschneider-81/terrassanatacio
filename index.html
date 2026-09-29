@@ -1302,7 +1302,7 @@ async function exportMonthCSV(ym, btn) {
     entries.forEach(function(e, i) {
       const sess = e.sess;
       const attMap = attMaps[i];
-      const slotLabel = e.slot === 'am' ? 'Mañana' : (e.slot === 'pm' ? 'Tarde' : e.slot);
+      const slotLabel = e.slot === 'am' ? 'Mañana' : (e.slot === 'pm' ? 'Tarde' : (e.slot === 'fis' ? 'Físico' : e.slot));
       const base = [e.date, slotLabel, sess.title || 'Sin título', sess.phase || '',
         (sess.targetRPE != null ? sess.targetRPE : ''), (sess.duration != null ? sess.duration : '')];
       const ids = Object.keys(attMap);
@@ -2033,17 +2033,22 @@ function buildVolumeBlock(session, prefix) {
 // ============================================================
 // Storage format v2: tn:session:DATE = { am: sessObj|null, pm: sessObj|null }
 // Legacy format: tn:session:DATE = sessObj (treated as single/am)
+// Turnos: mañana / tarde / físico (gym NeuroForce, siempre fase Fuerza)
+const SLOT_LABEL = { am: '☀️ Mañana', pm: '🌙 Tarde', fis: '🏋️ Físico' };
+const SLOT_SHORT = { am: 'AM', pm: 'PM', fis: 'FÍS' };
 function normDay(raw) {
   if (!raw) return null;
-  if (raw.am !== undefined || raw.pm !== undefined) return { am: raw.am || null, pm: raw.pm || null };
-  return { am: raw, pm: null }; // legacy single session
+  if (raw.am !== undefined || raw.pm !== undefined || raw.fis !== undefined) return { am: raw.am || null, pm: raw.pm || null, fis: raw.fis || null };
+  return { am: raw, pm: null, fis: null }; // legacy single session
 }
 function daySlots(raw) {
   const n = normDay(raw);
   if (!n) return [];
   const out = [];
-  if (n.am) out.push({ slot: 'am', label: n.pm ? '☀️ Mañana' : '', sess: n.am });
+  const multi = [n.am, n.pm, n.fis].filter(Boolean).length > 1;
+  if (n.am) out.push({ slot: 'am', label: multi ? '☀️ Mañana' : '', sess: n.am });
   if (n.pm) out.push({ slot: 'pm', label: '🌙 Tarde', sess: n.pm });
+  if (n.fis) out.push({ slot: 'fis', label: SLOT_LABEL.fis, sess: n.fis });
   return out;
 }
 function isDoubleDay(raw) {
@@ -2054,8 +2059,8 @@ function isDoubleDay(raw) {
 // Legacy: entry = { rpe, fatigue, note }
 function normRPE(entry) {
   if (!entry) return null;
-  if (entry.am !== undefined || entry.pm !== undefined) return { am: entry.am || null, pm: entry.pm || null };
-  return { am: entry, pm: null };
+  if (entry.am !== undefined || entry.pm !== undefined || entry.fis !== undefined) return { am: entry.am || null, pm: entry.pm || null, fis: entry.fis || null };
+  return { am: entry, pm: null, fis: null };
 }
 function rpeSubmissions(entry) {
   const n = normRPE(entry);
@@ -2063,6 +2068,7 @@ function rpeSubmissions(entry) {
   const out = [];
   if (n.am) out.push({ slot: 'am', data: n.am });
   if (n.pm) out.push({ slot: 'pm', data: n.pm });
+  if (n.fis) out.push({ slot: 'fis', data: n.fis });
   return out;
 }
 
@@ -3551,6 +3557,7 @@ async function openCoachAdminModal() {
 // Cada dispositivo recuerda en localStorage cuál fue la última que vio.
 // ============================================================
 const CHANGELOG = [
+  { v: 8, date: '2026-09-29', text: '🏋️ Nuevo turno Físico: un día puede tener Mañana + Tarde + Físico (gym). Cada turno lleva su propio RPE y la carga del día (ACWR) suma los tres.' },
   { v: 7, date: '2026-09-06', text: '📱 Cambiamos el ícono de la app. Si en tu pantalla de inicio seguís viendo el viejo: borrá el acceso directo y volvé a hacer "Agregar a inicio" desde Safari — iOS no lo actualiza solo.' },
   { v: 6, date: '2026-09-04', text: '🩸 Nuevo: test de lactato progresivo (curva, umbrales, zonas) — se hace desde el botón 🩸 en la fila de cada atleta en RPE.' },
   { v: 4, date: '2026-08-31', text: 'Nuevo: login con Google en la pantalla de crear cuenta de entrenador.' }
@@ -3759,14 +3766,16 @@ function buildCoachSession() {
   const lturno = document.createElement('label'); lturno.className = 'field-label'; lturno.textContent = 'Turno';
   d.appendChild(lturno);
   const turnoWrap = document.createElement('div'); turnoWrap.className = 'pack-toggle';
-  [['unica','Única'],['am','☀️ Mañana'],['pm','🌙 Tarde']].forEach(function(pair) {
+  [['unica','Única'],['am','☀️ Mañana'],['pm','🌙 Tarde'],['fis','🏋️ Físico']].forEach(function(pair) {
     const btn = document.createElement('button');
     btn.className = 'pack-btn' + (S.sessionSlot === pair[0] ? ' active' : '');
     btn.textContent = pair[1];
     btn.onclick = function() {
       S.sessionSlot = pair[0];
+      // Físico = gym NeuroForce: siempre fase Fuerza (muestra Pull/Push/Lower)
+      if (pair[0] === 'fis' && S.sessionPhase !== 'Fuerza') { S.sessionPhase = 'Fuerza'; S.alphaPhase = null; render(); return; }
       turnoWrap.querySelectorAll('.pack-btn').forEach(function(b, i) {
-        b.classList.toggle('active', ['unica','am','pm'][i] === pair[0]);
+        b.classList.toggle('active', ['unica','am','pm','fis'][i] === pair[0]);
       });
     };
     turnoWrap.appendChild(btn);
@@ -3871,8 +3880,8 @@ function buildCoachSession() {
       title: S.sessionTitle || 'Sin título',
       targetRPE: S.sessionRPE,
       duration: S.sessionDuration,
-      phase: S.sessionPhase,
-      alphaPhase: S.alphaPhase,
+      phase: S.sessionSlot === 'fis' ? 'Fuerza' : S.sessionPhase,
+      alphaPhase: S.sessionSlot === 'fis' ? null : S.alphaPhase,
       pullText: S.pullText,
       pushText: S.pushText,
       lowerText: S.lowerText,
@@ -4415,7 +4424,7 @@ function buildCoachSquad() {
     const missing = [];
     if (!w) missing.push('Check-in');
     slotsToday.forEach(function(s) {
-      if (!(rpeEntry && rpeEntry[s.slot])) missing.push('RPE ' + (s.slot === 'am' ? 'AM' : 'PM'));
+      if (!(rpeEntry && rpeEntry[s.slot])) missing.push('RPE ' + (SLOT_SHORT[s.slot] || s.slot));
     });
     return { name: name, missing: missing };
   }).sort(function(a, b) {
@@ -5336,7 +5345,7 @@ function buildCoachHistorial() {
           const slotEditBtn = document.createElement('button');
           slotEditBtn.className = 'sess-del-btn';
           slotEditBtn.innerHTML = '✏️';
-          slotEditBtn.title = 'Editar ' + (slotObj.slot === 'am' ? 'mañana' : 'tarde');
+          slotEditBtn.title = 'Editar ' + (slotObj.slot === 'am' ? 'mañana' : (slotObj.slot === 'fis' ? 'físico' : 'tarde'));
           slotEditBtn.style.cssText = 'min-width:28px;height:28px;font-size:0.7rem;margin-right:0;flex-shrink:0;';
           slotEditBtn.onclick = function(ev) { ev.stopPropagation(); loadSlotForEdit(sess2, slotObj.slot); };
           shRow.append(shLbl, slotEditBtn);
@@ -5424,7 +5433,7 @@ function buildHoyStrip() {
     items.push({ lb:'RPE', done: !!(rpeEntry && rpeEntry[slots[0].slot]), rpe:true });
   } else if (slots.length > 1) {
     slots.forEach(function(s){
-      items.push({ lb:'RPE ' + (s.slot==='am'?'AM':'PM'), done: !!(rpeEntry && rpeEntry[s.slot]), rpe:true });
+      items.push({ lb:'RPE ' + (SLOT_SHORT[s.slot] || s.slot), done: !!(rpeEntry && rpeEntry[s.slot]), rpe:true });
     });
   }
   items.forEach(function(it){
@@ -5860,19 +5869,18 @@ function buildAthleteRPE() {
   const double = slots.length > 1;
 
   // Determine active slot: S.rpeSlot ('am'|'pm'), default first un-submitted
-  const entry = normRPE(getDayRPE(rpeDate)[S.athleteName]) || { am: null, pm: null };
-  const queuedAM = findQueuedRPE(rpeDate, 'am', S.athleteName);
-  const queuedPM = findQueuedRPE(rpeDate, 'pm', S.athleteName);
+  const entry = normRPE(getDayRPE(rpeDate)[S.athleteName]) || { am: null, pm: null, fis: null };
   // Lo que está en cola (aún no confirmado por el servidor) cuenta como "enviado"
   // para la UI: evita que el atleta lo cargue dos veces mientras no hay red.
-  if (queuedAM && !entry.am) { entry.am = { rpe: queuedAM.rpe, fatigue: queuedAM.fatigue, pending: true }; }
-  if (queuedPM && !entry.pm) { entry.pm = { rpe: queuedPM.rpe, fatigue: queuedPM.fatigue, pending: true }; }
-  if (!S.rpeSlot || !double) {
-    if (double) {
-      S.rpeSlot = (entry && entry.am) ? 'pm' : 'am';
-    } else {
-      S.rpeSlot = 'am';
-    }
+  ['am', 'pm', 'fis'].forEach(function(k) {
+    const q = findQueuedRPE(rpeDate, k, S.athleteName);
+    if (q && !entry[k]) { entry[k] = { rpe: q.rpe, fatigue: q.fatigue, pending: true }; }
+  });
+  // Turno activo: el RPE se guarda en el turno REAL de la sesión (am/pm/fis),
+  // así el ACWR cruza con la duración correcta. Sin sesión → 'am' como antes.
+  const slotKeys = slots.length > 0 ? slots.map(function(s) { return s.slot; }) : ['am'];
+  if (!S.rpeSlot || slotKeys.indexOf(S.rpeSlot) === -1) {
+    S.rpeSlot = slotKeys.find(function(k) { return !entry[k]; }) || slotKeys[0];
   }
 
   // Session info card
@@ -5890,7 +5898,7 @@ function buildAthleteRPE() {
   // Slot tabs for double days
   if (double) {
     const slotTabs = document.createElement('div'); slotTabs.className = 'pack-toggle'; slotTabs.style.marginBottom = '14px';
-    [['am','☀️ Mañana'],['pm','🌙 Tarde']].forEach(function(pair) {
+    slots.map(function(s) { return [s.slot, SLOT_LABEL[s.slot]]; }).forEach(function(pair) {
       const done = entry && entry[pair[0]];
       const btn = document.createElement('button');
       btn.className = 'pack-btn' + (S.rpeSlot === pair[0] ? ' active' : '');
@@ -5902,7 +5910,7 @@ function buildAthleteRPE() {
   }
 
   // Already submitted this slot?
-  const slotEntry = entry ? entry[double ? S.rpeSlot : 'am'] : null;
+  const slotEntry = entry ? entry[S.rpeSlot] : null;
   if (slotEntry) {
     const fat = FATIGUE.find(function(f){return f.v===slotEntry.fatigue;}) || FATIGUE[0];
     const pendingNote = slotEntry.pending
@@ -5960,12 +5968,12 @@ function buildAthleteRPE() {
 
   // Submit
   const submitBtn = document.createElement('button'); submitBtn.className='btn btn-primary'; submitBtn.style.marginTop='20px';
-  submitBtn.textContent = 'Registrar RPE' + (double ? (S.rpeSlot === 'am' ? ' (Mañana)' : ' (Tarde)') : '');
+  submitBtn.textContent = 'Registrar RPE' + (double ? (S.rpeSlot === 'am' ? ' (Mañana)' : (S.rpeSlot === 'fis' ? ' (Físico)' : ' (Tarde)')) : '');
   submitBtn.onclick = () => {
     if (!S.rpeSelected || !S.fatigueSelected) {
       alert('Selecciona RPE y estado de fatiga'); return;
     }
-    const slotKey = double ? S.rpeSlot : 'am';
+    const slotKey = S.rpeSlot;
     const btnLabel = submitBtn.textContent;
     submitBtn.disabled = true; submitBtn.textContent = 'Guardando…';
     dbSaveRPE(rpeDate, slotKey, S.athleteName, S.rpeSelected, S.fatigueSelected, S.rpeNote).then(function(res) {
@@ -6041,7 +6049,7 @@ function buildAthleteSession() {
 
     const dch = document.createElement('div'); dch.className = 'day-card-header';
     const dayLabel = DAYS_ES[dt.getDay()] + ' ' + dt.getDate();
-    const doubleTag = slots.length > 1 ? ' <span style="font-size:0.65rem;color:var(--gold);font-weight:700">2x</span>' : '';
+    const doubleTag = slots.length > 1 ? ' <span style="font-size:0.65rem;color:var(--gold);font-weight:700">' + slots.length + 'x</span>' : '';
     const todayBadge = isToday ? ' <span style="font-size:0.65rem;background:var(--accent2);color:#fff;padding:1px 6px;border-radius:4px;font-weight:700">HOY</span>' : '';
     const metersTag = totalM > 0 ? ' <span style="font-size:0.72rem;color:var(--accent2)">' + totalM + 'm</span>' : '';
     const arrow = slots.length > 0 ? (S.athDayOpen[ds] ? ' ▾' : ' ▸') : '';
