@@ -3531,7 +3531,7 @@ async function openCoachAdminModal() {
           const del = document.createElement('button'); del.className = 'btn-exit'; del.textContent = '\ud83d\uddd1';
           del.title = 'Borrar cuenta por completo';
           del.onclick = () => {
-            showConfirm('¿Borrar "' + c.email + '"?', 'Se elimina por completo. No se puede deshacer.', function() {
+            showConfirm('¿Borrar "' + c.email + '"?', 'Se elimina por completo, junto con sus nadadores, sesiones y competiciones. No se puede deshacer.', function() {
               fetch(SUPABASE_URL + '/rest/v1/coaches?id=eq.' + c.id, {
                 method: 'DELETE',
                 headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Prefer': 'return=minimal' }
@@ -3746,8 +3746,13 @@ function buildCoachSession() {
   const l3 = document.createElement('label'); l3.className = 'field-label'; l3.textContent = 'Fase';
   d.appendChild(l3);
   const phaseSelect = document.createElement('select');
-  PHASES.forEach(p => {
-    const o = document.createElement('option'); o.value = p; o.textContent = p;
+  // Físico → solo Fuerza (NeuroForce). Mañana/Tarde/Única → sin Fuerza
+  // (salvo al editar una sesión vieja que ya estaba guardada como Fuerza).
+  if (S.sessionSlot === 'fis') S.sessionPhase = 'Fuerza';
+  const phaseOpts = S.sessionSlot === 'fis' ? ['Fuerza']
+    : PHASES.filter(function(p) { return p !== 'Fuerza' || S.sessionPhase === 'Fuerza'; });
+  phaseOpts.forEach(p => {
+    const o = document.createElement('option'); o.value = p; o.textContent = (S.sessionSlot === 'fis' && p === 'Fuerza') ? 'NeuroForce' : p;
     if (p === S.sessionPhase) o.selected = true;
     phaseSelect.appendChild(o);
   });
@@ -3774,6 +3779,7 @@ function buildCoachSession() {
       S.sessionSlot = pair[0];
       // Físico = gym NeuroForce: siempre fase Fuerza (muestra Pull/Push/Lower)
       if (pair[0] === 'fis' && S.sessionPhase !== 'Fuerza') { S.sessionPhase = 'Fuerza'; S.alphaPhase = null; render(); return; }
+      if (pair[0] !== 'fis' && S.sessionPhase === 'Fuerza') { S.sessionPhase = 'Ligero'; S.alphaPhase = null; render(); return; }
       turnoWrap.querySelectorAll('.pack-btn').forEach(function(b, i) {
         b.classList.toggle('active', ['unica','am','pm','fis'][i] === pair[0]);
       });
@@ -3881,7 +3887,7 @@ function buildCoachSession() {
       targetRPE: S.sessionRPE,
       duration: S.sessionDuration,
       phase: S.sessionSlot === 'fis' ? 'Fuerza' : S.sessionPhase,
-      alphaPhase: S.sessionSlot === 'fis' ? null : S.alphaPhase,
+      alphaPhase: S.alphaPhase,
       pullText: S.pullText,
       pushText: S.pushText,
       lowerText: S.lowerText,
