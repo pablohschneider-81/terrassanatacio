@@ -1338,7 +1338,7 @@ async function dbSaveAttendanceBulk(sessionId, statusByAthleteId) {
 }
 let _attendancePctCache = null;
 async function dbGetAttendancePct() {
-  // vista attendance_monthly: ya trae name, no hace falta resolver id
+  // vista attendance_monthly: ya trae name, no hace falta resolver id. Ventana móvil de 30 días (no mes calendario).
   if (_attendancePctCache) return _attendancePctCache;
   const rows = await sbFetch('attendance_monthly?select=name,attendance_pct');
   const map = {};
@@ -5701,7 +5701,9 @@ function buildAthleteInicio() {
   }
 
   const acwrVal = calcACWR(S.athleteName);
-  const acwr = acwrVal !== null ? Math.round(acwrVal * 100) / 100 : null;
+  // Con <14 días de carga calcACWR devuelve {calibrating}: no es un número (antes salía NaN + "Riesgo")
+  const acwrCal = (acwrVal && typeof acwrVal === 'object' && acwrVal.calibrating) ? acwrVal : null;
+  const acwr = (acwrVal !== null && !acwrCal) ? Math.round(acwrVal * 100) / 100 : null;
   const col = zoneColor(acwr);
   const pctAngle = acwr !== null ? Math.min(acwr / 2.0, 1) * 340 - 90 : -90;
 
@@ -5724,14 +5726,14 @@ function buildAthleteInicio() {
     '<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">' +
       '<div style="font-size:0.58rem;letter-spacing:2.5px;color:#4a6a8a;font-weight:700;margin-bottom:2px">ACWR</div>' +
       '<div style="font-size:2.8rem;font-weight:900;line-height:1;color:' + col + '">' + (acwr!==null?acwr.toFixed(2):'—') + '</div>' +
-      '<div style="font-size:0.62rem;font-weight:700;letter-spacing:1px;margin-top:5px;color:' + col + '">' + zoneLabel(acwr) + '</div>' +
+      '<div style="font-size:0.62rem;font-weight:700;letter-spacing:1px;margin-top:5px;color:' + col + '">' + (acwrCal ? '○ CALIBRANDO' : zoneLabel(acwr)) + '</div>' +
     '</div>';
   ringSection.appendChild(ringWrap);
 
   // Mensaje coaching glass
   const msg = document.createElement('div');
   msg.style.cssText = 'margin-top:14px;padding:11px 18px;font-size:0.82rem;color:#4a6a8a;line-height:1.5;text-align:center;max-width:300px;background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-radius:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
-  msg.innerHTML = coachMsg(acwr);
+  msg.innerHTML = acwrCal ? '<strong>Calibrando.</strong> ' + acwrCal.days + ' de 14 días con carga en las últimas 4 semanas. Registra tu RPE en cada sesión.' : coachMsg(acwr);
   ringSection.appendChild(msg);
   d.appendChild(ringSection);
 
@@ -5743,7 +5745,7 @@ function buildAthleteInicio() {
     const attCol = pct == null ? '#7a9ab8' : pct >= 85 ? '#1e8449' : pct >= 70 ? '#c0621a' : '#c0392b';
     const attCard = document.createElement('div');
     attCard.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-radius:14px;padding:14px 16px;margin-bottom:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
-    attCard.innerHTML = '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#4a6a8a;text-transform:uppercase;margin-bottom:4px">ASISTENCIA · MES ACTUAL</div>' +
+    attCard.innerHTML = '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#4a6a8a;text-transform:uppercase;margin-bottom:4px">ASISTENCIA · ÚLTIMOS 30 DÍAS</div>' +
       '<div style="font-size:1.6rem;font-weight:900;color:' + attCol + '">' + (pct == null ? '—' : pct + '%') + '</div>';
     d.appendChild(attCard);
   }
