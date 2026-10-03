@@ -5792,15 +5792,18 @@ function buildWellnessCheckin() {
   card.appendChild(head);
 
   WELL_QS.forEach(function(q){
-    const block = document.createElement('div'); block.style.cssText = 'margin-bottom:14px';
-    block.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">' +
+    const block = document.createElement('div'); block.style.cssText = 'margin-bottom:10px';
+    block.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">' +
       '<span style="font-size:0.8rem;font-weight:700">'+q.lbl+'</span>' +
       '<span style="font-size:0.62rem;color:#7a9ab8;font-weight:600">'+q.lo+' · '+q.hi+'</span></div>';
     const scale = document.createElement('div'); scale.style.cssText = 'display:flex;gap:6px';
     for (let i=1;i<=5;i++){
       const b = document.createElement('div');
       const on = sel[q.key]===i;
-      b.style.cssText = 'flex:1;aspect-ratio:1.15;border:2px solid '+(on?'rgba(0,0,0,0.45)':'transparent')+';border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.95rem;color:#fff;cursor:pointer;transition:transform .12s;background:'+WELL_SCALE_COLORS[i]+';opacity:'+(on?'1':'0.5')+';'+(on?'transform:scale(1.08);box-shadow:0 3px 10px rgba(0,0,0,0.18)':'');
+      // Mismos colores de siempre; el "apagado" es el color al 50% (antes opacity .5) para que la sombra no se desvanezca.
+      const hexC = WELL_SCALE_COLORS[i];
+      const rgbC = [1,3,5].map(function(k){ return parseInt(hexC.substr(k,2),16); }).join(',');
+      b.style.cssText = 'flex:1;height:38px;border:2px solid '+(on?'rgba(0,0,0,0.45)':'transparent')+';border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.9rem;color:#fff;text-shadow:0 1px 1px rgba(0,0,0,0.25);cursor:pointer;transition:transform .12s,box-shadow .12s;background:linear-gradient(180deg,rgba(255,255,255,0.30),rgba(255,255,255,0) 55%),'+(on?hexC:'rgba('+rgbC+',0.5)')+';'+(on?'transform:scale(1.06);box-shadow:0 2px 0 rgba(0,0,0,0.28),0 5px 10px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.5)':'box-shadow:0 2px 0 rgba(0,0,0,0.14),0 3px 6px rgba(0,0,0,0.10),inset 0 1px 0 rgba(255,255,255,0.45)');
       b.textContent = i;
       b.onclick = (function(key,val){ return function(){ S.wellSel[key]=val; render(); }; })(q.key,i);
       scale.appendChild(b);
@@ -6031,16 +6034,21 @@ function buildAthleteInicio() {
   ringSection.appendChild(msg);
   d.appendChild(ringSection);
 
-  // ── ASISTENCIA (mes actual) ──
-  if (!DATA.attendancePct) {
-    dbGetAttendancePct().then(function(map) { DATA.attendancePct = map; render(); });
+  // ── ASISTENCIA (mes en curso y total) ──
+  if (!DATA.attendanceSum) {
+    dbGetAttendanceSummary().then(function(map) { DATA.attendanceSum = map; render(); });
   } else {
-    const pct = DATA.attendancePct[S.athleteName];
-    const attCol = pct == null ? '#7a9ab8' : pct >= 85 ? '#1e8449' : pct >= 70 ? '#c0621a' : '#c0392b';
+    const att = DATA.attendanceSum[S.athleteName] || {};
+    const attColOf = function(p) { return p == null ? '#7a9ab8' : p >= 85 ? '#1e8449' : p >= 70 ? '#c0621a' : '#c0392b'; };
+    const attBlock = function(lbl, p, n, extra) {
+      return '<div style="flex:1;' + (extra || '') + '"><div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#4a6a8a;text-transform:uppercase;margin-bottom:4px">' + lbl + '</div>' +
+        '<div style="font-size:1.6rem;font-weight:900;color:' + attColOf(p) + '">' + (p == null ? '—' : Math.round(p) + '%') + '</div>' +
+        '<div style="font-size:0.62rem;color:#7a9ab8;font-weight:600;margin-top:1px">' + (n ? n + ' sesión' + (n !== 1 ? 'es' : '') : 'sin sesiones') + '</div></div>';
+    };
     const attCard = document.createElement('div');
-    attCard.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-radius:14px;padding:14px 16px;margin-bottom:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
-    attCard.innerHTML = '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#4a6a8a;text-transform:uppercase;margin-bottom:4px">ASISTENCIA · ÚLTIMOS 30 DÍAS</div>' +
-      '<div style="font-size:1.6rem;font-weight:900;color:' + attCol + '">' + (pct == null ? '—' : pct + '%') + '</div>';
+    attCard.style.cssText = 'display:flex;gap:16px;background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-radius:14px;padding:14px 16px;margin-bottom:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
+    attCard.innerHTML = attBlock('Asistencia · mes', att.pct_month, att.n_month) +
+      attBlock('Asistencia · total', att.pct_total, att.n_total, 'border-left:1px solid rgba(100,140,180,0.2);padding-left:16px;');
     d.appendChild(attCard);
   }
 
@@ -6093,25 +6101,9 @@ function buildAthleteInicio() {
 
   d.appendChild(grid);
 
-  // ── BARRA ZONA ──
-  const markerPct = acwr!==null?Math.min(Math.max(acwr/2.0*100,2),97):0;
-  const bar = document.createElement('div');
-  bar.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.82);border-radius:16px;padding:14px 15px;margin-bottom:16px;box-shadow:0 4px 20px rgba(100,140,180,0.14),inset 0 1px 0 rgba(255,255,255,0.9)';
-  bar.innerHTML =
-    '<div style="font-size:0.6rem;letter-spacing:1.5px;color:#4a6a8a;font-weight:700;text-transform:uppercase;margin-bottom:9px">⚖️ Zona de carga aguda:crónica</div>' +
-    '<div style="height:8px;border-radius:4px;background:linear-gradient(to right,#2980b9 0%,#1e8449 35%,#1e8449 58%,#c0621a 73%,#c0392b 100%);position:relative;box-shadow:inset 0 1px 3px rgba(0,0,0,0.1)">' +
-      '<div style="position:absolute;top:-5px;width:18px;height:18px;border-radius:50%;background:white;border:2.5px solid '+col+';transform:translateX(-50%);left:'+markerPct+'%;box-shadow:0 0 10px '+col+'88,0 2px 6px rgba(0,0,0,0.15)"></div>' +
-    '</div>' +
-    '<div style="display:flex;justify-content:space-between;margin-top:9px;font-size:0.58rem;color:#4a6a8a;font-weight:600">' +
-      '<span>Baja<br><span style="color:#2980b9">0.8</span></span>' +
-      '<span style="text-align:center">Óptima<br><span style="color:#1e8449">0.8–1.3</span></span>' +
-      '<span style="text-align:right">Riesgo<br><span style="color:#c0392b">1.5+</span></span>' +
-    '</div>';
-  d.appendChild(bar);
-
   // ── GRÁFICO RPE ──
   if (hist.length > 1) {
-    const stRPE = document.createElement('div'); stRPE.className = 'section-title'; stRPE.style.marginTop='4px'; stRPE.textContent = 'ÚLTIMAS SESIONES — RPE';
+    const stRPE = document.createElement('div'); stRPE.className = 'section-title'; stRPE.style.marginTop='10px'; stRPE.textContent = 'ÚLTIMAS SESIONES — RPE';
     d.appendChild(stRPE);
     d.appendChild(buildRPEChart(hist.slice(-14)));
   }
