@@ -2243,6 +2243,12 @@ function contrastText(hex) {
 // ============================================================
 function renderTextWithNotes(text) {
   if (!text) return '';
+  // Bloques con llaves "N×{ … }" (los mismos que multiplica parseMeters): se
+  // convierten al formato de indentación. Sin "}" de cierre no se tocan.
+  text = text.replace(/(\d+)\s*[xX×]\s*\{([^}]*)\}/g, function(mm, n, inner, off, full) {
+    const hayMas = full.slice(off + mm.length).trim() !== '';
+    return '\n' + n + '×\n' + inner.trim() + (hayMas ? '\n\n' : '');
+  });
   // Modelo de bloque por indentación (sin llaves):
   //   - Una línea que empieza con "N×" o "Nx" abre un bloque de repetición.
   //   - Las líneas siguientes pertenecen al bloque (se muestran sangradas).
