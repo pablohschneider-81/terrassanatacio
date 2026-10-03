@@ -1334,7 +1334,18 @@ async function dbSaveAttendanceBulk(sessionId, statusByAthleteId) {
     body: JSON.stringify(body)
   });
   _attendancePctCache = null; // invalida cache de % del mes, se recalcula al próximo pedido
+  _attendanceSumCache = null; if (typeof DATA !== 'undefined') DATA.attendanceSum = null;
   return res;
+}
+// Asistencia total y del mes en curso (vista attendance_summary): presentes / (presentes + ausentes).
+let _attendanceSumCache = null;
+async function dbGetAttendanceSummary() {
+  if (_attendanceSumCache) return _attendanceSumCache;
+  const rows = await sbFetch('attendance_summary?select=name,pct_total,n_total,pct_month,n_month');
+  const map = {};
+  (rows || []).forEach(r => { map[r.name] = r; });
+  _attendanceSumCache = map;
+  return map;
 }
 let _attendancePctCache = null;
 async function dbGetAttendancePct() {
@@ -1965,6 +1976,8 @@ function resetSession() {
   DATA.rpe = {}; DATA.comments = {}; DATA.competitions = []; DATA.events = [];
   DATA.inscriptions = []; DATA.athleteHist = {}; DATA.allHistLoaded = false;
   DATA.wellness = {}; DATA.athleteWellHist = {}; DATA.pendingSurvey = {};
+  DATA.attendanceSum = null; _attendanceSumCache = null;
+  DATA.attendancePct = null; _attendancePctCache = null;
   DATA.strengthEx = undefined; DATA.coachStrAthletes = undefined;
   DATA.coachStrLatest = undefined; DATA.coachStrBw = undefined;
   // Cachés de módulo
@@ -3727,6 +3740,7 @@ async function openCoachAdminModal() {
 // Cada dispositivo recuerda en localStorage cuál fue la última que vio.
 // ============================================================
 const CHANGELOG = [
+  { v: 10, date: '2026-10-03', text: '📊 Escuadra: nuevos gráficos de tu planificación de los últimos 14 días. <b>Volumen</b> (km por día, con el total de los últimos 7 días frente a los 7 previos) e <b>intensidad planificada</b> (el RPE objetivo que pones en cada sesión). Además, las tarjetas de carga (ACWR) suben arriba y ahora muestran la asistencia del mes en curso y la total; la adherencia de hoy pasa al final, con un aviso arriba si hay pendientes.' },
   { v: 9, date: '2026-10-03', text: '🧱 Nuevo: bloques de series con llaves, y se pueden anidar. Cada bloque se ve con su <b>N×</b> y una línea vertical, y los metros se multiplican solos.'
     + '<span style="display:block;white-space:pre;font-family:monospace;font-size:0.76rem;margin:8px 0 2px">4x{\n1x200 pull\n1x100 tabla\n}</span>'
     + '<span style="display:block;font-size:0.76rem;margin-bottom:8px">→ 1200 m</span>'
@@ -4579,13 +4593,14 @@ function buildCoachSquad() {
   const athletes = getAthletes();
 
   // ── Cargar historial de todos + asistencia (una sola vez por sesión de la app) ──
-  if (!DATA.allHistLoaded || !DATA.attendancePct) {
+  if (!DATA.allHistLoaded || !DATA.attendancePct || !DATA.attendanceSum) {
     Promise.all([
       DATA.allHistLoaded ? Promise.resolve() : dbGetAllAthleteHist().then(function(map) {
         Object.keys(map).forEach(function(name) { DATA.athleteHist[name] = map[name]; });
         DATA.allHistLoaded = true;
       }),
-      DATA.attendancePct ? Promise.resolve() : dbGetAttendancePct().then(function(map) { DATA.attendancePct = map; })
+      DATA.attendancePct ? Promise.resolve() : dbGetAttendancePct().then(function(map) { DATA.attendancePct = map; }),
+      DATA.attendanceSum ? Promise.resolve() : dbGetAttendanceSummary().then(function(map) { DATA.attendanceSum = map; })
     ]).then(render);
     const loading = document.createElement('div'); loading.className = 'card';
     loading.innerHTML = '<div class="card-sub">Cargando carga de los últimos 28 días…</div>';
@@ -4613,15 +4628,24 @@ function buildCoachSquad() {
   });
 
   const pendingCount = adherence.filter(function(a){ return a.missing.length > 0; }).length;
+  // La adherencia se arma aparte y se coloca al final de la pantalla.
+  const adhWrap = document.createElement('div');
   const adhTitle = document.createElement('div'); adhTitle.className = 'section-title';
   adhTitle.textContent = 'ADHERENCIA HOY' + (pendingCount > 0 ? ' · ' + pendingCount + ' pendiente' + (pendingCount !== 1 ? 's' : '') : ' · completo');
-  d.appendChild(adhTitle);
+  adhWrap.appendChild(adhTitle);
+  if (pendingCount > 0) {
+    const pend = document.createElement('div');
+    pend.style.cssText = 'font-size:0.75rem;font-weight:700;color:#c0392b;margin:-6px 0 12px;cursor:pointer';
+    pend.textContent = '⏳ ' + pendingCount + ' pendiente' + (pendingCount !== 1 ? 's' : '') + ' de check-in o RPE hoy · ver abajo ↓';
+    pend.onclick = function() { adhWrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+    d.appendChild(pend);
+  }
 
   if (pendingCount === 0) {
     const ok = document.createElement('div'); ok.className = 'card';
     ok.style.cssText = 'padding:12px 14px;border:1px solid rgba(30,132,73,0.35);background:rgba(30,132,73,0.08)';
     ok.innerHTML = '<div style="font-size:0.85rem;color:#1e8449;font-weight:700">✅ Todo el equipo completó check-in y RPE de hoy.</div>';
-    d.appendChild(ok);
+    adhWrap.appendChild(ok);
   } else {
     const adhCard = document.createElement('div'); adhCard.className = 'card'; adhCard.style.padding = '4px 0';
     adherence.filter(function(a){ return a.missing.length > 0; }).forEach(function(a, i) {
@@ -4631,7 +4655,7 @@ function buildCoachSquad() {
         '<span style="font-size:0.68rem;font-weight:700;color:#c0392b">' + a.missing.join(' · ') + '</span>';
       adhCard.appendChild(row);
     });
-    d.appendChild(adhCard);
+    adhWrap.appendChild(adhCard);
   }
 
   const acwrData = athletes.map(function(name) {
@@ -4656,6 +4680,8 @@ function buildCoachSquad() {
     const empty = document.createElement('div'); empty.className = 'card';
     empty.innerHTML = '<div class="card-sub">Sin datos suficientes todavía.</div>';
     d.appendChild(empty);
+    const chartsE = buildSquadCharts(); if (chartsE) d.appendChild(chartsE);
+    d.appendChild(adhWrap);
     return d;
   }
 
@@ -4678,9 +4704,11 @@ function buildCoachSquad() {
     const lastRpe = hist.length > 0 ? hist[hist.length - 1] : null; // hist viene asc por fecha
     const rpeStr = lastRpe ? 'RPE ' + lastRpe.rpe + ' · ' + lastRpe.date.slice(5).split('-').reverse().join('/') : 'Sin RPE';
 
-    const attPct = DATA.attendancePct[x.name];
-    const attCol = attPct == null ? '#7a9ab8' : attPct >= 85 ? '#1e8449' : attPct >= 70 ? '#c0621a' : '#c0392b';
-    const attStr = attPct == null ? '—' : attPct + '%';
+    const att = (DATA.attendanceSum || {})[x.name] || {};
+    const attColOf = function(p) { return p == null ? '#7a9ab8' : p >= 85 ? '#1e8449' : p >= 70 ? '#c0621a' : '#c0392b'; };
+    const attStrOf = function(p) { return p == null ? '—' : Math.round(p) + '%'; };
+    const attHtml = '<div style="font-size:0.68rem;font-weight:700;color:' + attColOf(att.pct_month) + '" title="Asistencia del mes en curso (' + (att.n_month || 0) + ' sesiones)">Mes ' + attStrOf(att.pct_month) + (att.n_month ? ' <span style="font-weight:400;color:#7a9ab8">(' + att.n_month + ')</span>' : '') + '</div>'
+      + '<div style="font-size:0.68rem;font-weight:700;color:' + attColOf(att.pct_total) + '" title="Asistencia total (' + (att.n_total || 0) + ' sesiones)">Total ' + attStrOf(att.pct_total) + '</div>';
 
     const ms = calcMonotonyStrain(x.name);
     let monoHtml = '';
@@ -4698,7 +4726,7 @@ function buildCoachSquad() {
       + '<div class="acwr-val" style="color:' + x.info.color + '">' + val + '</div>'
       + '<div class="acwr-lbl" style="color:' + x.info.color + '">' + (isCal ? 'Provisional' : x.info.label) + '</div>'
       + '<div style="font-size:0.6rem;color:#7a9ab8;margin-top:4px;border-top:1px solid rgba(100,140,180,0.15);padding-top:4px">' + rpeStr + '</div>'
-      + '<div style="font-size:0.68rem;font-weight:700;color:' + attCol + '">Asist. ' + attStr + '</div>'
+      + attHtml
       + monoHtml;
     grid.appendChild(card);
   });
@@ -4709,7 +4737,100 @@ function buildCoachSquad() {
   note.textContent = 'Óptimo 0.8–1.3 · Atención 1.3–1.5 · Riesgo >1.5. El * marca valor provisional (faltan ~3 semanas de datos para que sea fiable). "M" = monotonía semanal (Foster): <1.5 bien variada, 1.5–2.0 moderada, >2.0 alta — semana repetitiva incluso con ACWR óptimo.';
   d.appendChild(note);
 
+  const charts = buildSquadCharts(); if (charts) d.appendChild(charts);
+  d.appendChild(adhWrap);
+
   return d;
+}
+
+// Gráficos de la planificación del entrenador (no del RPE de los nadadores):
+// volumen diario en metros e intensidad planificada (RPE objetivo), últimos 14 días.
+function buildSquadCharts() {
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const dt = new Date(); dt.setDate(dt.getDate() - i);
+    const ds = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+    const slots = daySlots(getSession(ds));
+    let meters = 0, mins = 0, load = 0;
+    slots.forEach(function(s) {
+      meters += totalMeters(s.sess);
+      const dur = s.sess.duration || 80, t = s.sess.targetRPE || 0;
+      mins += dur; load += t * dur;
+    });
+    days.push({ date: ds, meters: meters, rpe: mins > 0 ? Math.round((load / mins) * 10) / 10 : null, n: slots.length });
+  }
+  if (!days.some(function(x){ return x.n > 0; })) return null;
+
+  const wrap = document.createElement('div');
+  const W = 320, H = 150, PAD = { top: 18, right: 10, bottom: 24, left: 30 };
+  const iW = W - PAD.left - PAD.right, iH = H - PAD.top - PAD.bottom;
+  const bw = iW / days.length;
+  const xl = function(i) { const dt = dateObj(days[i].date); return '<text x="' + (PAD.left + bw * i + bw / 2) + '" y="' + (H - 6) + '" font-size="8" fill="#3a5a7a" text-anchor="middle">' + dt.getDate() + '/' + (dt.getMonth() + 1) + '</text>'; };
+  const xLabels = days.map(function(x, i) { return (i % 2 === 1 || i === days.length - 1) ? xl(i) : ''; }).join('');
+  const mkCard = function(svgHtml, noteTxt) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('width', '100%'); svg.setAttribute('height', H);
+    svg.innerHTML = svgHtml;
+    const card = document.createElement('div'); card.className = 'card';
+    card.style.cssText = 'padding:12px 8px;background:rgba(255,255,255,0.65);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.82);box-shadow:0 2px 16px rgba(100,140,180,0.15),inset 0 1px 0 rgba(255,255,255,0.9)';
+    card.appendChild(svg);
+    if (noteTxt) { const n = document.createElement('div'); n.style.cssText = 'font-size:0.68rem;color:var(--text2);padding:4px 8px 0'; n.textContent = noteTxt; card.appendChild(n); }
+    return card;
+  };
+
+  // ── Volumen ──
+  const sum7 = days.slice(7).reduce(function(a, x){ return a + x.meters; }, 0);
+  const prev7 = days.slice(0, 7).reduce(function(a, x){ return a + x.meters; }, 0);
+  const fmt = function(n) { return Math.round(n).toLocaleString('es-ES'); };
+  const delta = prev7 > 0 ? ' (' + (sum7 >= prev7 ? '+' : '') + Math.round((sum7 / prev7 - 1) * 100) + '%)' : '';
+  const maxM = Math.max.apply(null, days.map(function(x){ return x.meters; }).concat([1]));
+  const yMax = Math.ceil(maxM / 1000) * 1000;
+  const yv = function(m) { return PAD.top + iH - (m / yMax) * iH; };
+  const grid = [0.5, 1].map(function(f) { const m = yMax * f; return '<line x1="' + PAD.left + '" y1="' + yv(m) + '" x2="' + (PAD.left + iW) + '" y2="' + yv(m) + '" stroke="rgba(100,140,180,0.18)" stroke-width="1"/><text x="' + (PAD.left - 5) + '" y="' + (yv(m) + 3) + '" font-size="9" fill="#3a5a7a" text-anchor="end">' + (m / 1000).toFixed(m % 1000 ? 1 : 0) + 'k</text>'; }).join('');
+  // Misma estética que el gráfico de RPE del atleta: curva suave, área y puntos (sin barras).
+  const nPts = days.length;
+  const xp = function(i) { return PAD.left + 8 + (i / (nPts - 1)) * (iW - 16); };
+  const pts = days.map(function(x, i) { return { x: xp(i), y: yv(x.meters) }; });
+  const curve = function(close) {
+    let p = 'M' + pts[0].x + ' ' + pts[0].y;
+    for (let i = 1; i < pts.length; i++) {
+      const cx = (pts[i - 1].x + pts[i].x) / 2;
+      p += ' C' + cx + ' ' + pts[i - 1].y + ' ' + cx + ' ' + pts[i].y + ' ' + pts[i].x + ' ' + pts[i].y;
+    }
+    if (close) p += ' L' + pts[nPts - 1].x + ' ' + (PAD.top + iH) + ' L' + pts[0].x + ' ' + (PAD.top + iH) + ' Z';
+    return p;
+  };
+  const xLabelsV = days.map(function(x, i) {
+    if (i % 3 !== 1) return '';
+    const dt = dateObj(x.date);
+    return '<text x="' + xp(i) + '" y="' + (H - 6) + '" font-size="8" fill="#3a5a7a" text-anchor="middle">' + dt.getDate() + '/' + (dt.getMonth() + 1) + '</text>';
+  }).join('');
+  const dotsV = days.map(function(x, i) {
+    if (x.meters <= 0) return '<circle cx="' + pts[i].x + '" cy="' + pts[i].y + '" r="2.5" fill="#1a6fa8" opacity="0.5"><title>' + x.date + ' · 0 m</title></circle>';
+    return '<circle cx="' + pts[i].x + '" cy="' + pts[i].y + '" r="4" fill="#1a6fa8" stroke="white" stroke-width="2"><title>' + x.date + ' · ' + fmt(x.meters) + ' m</title></circle>'
+      + '<text x="' + pts[i].x + '" y="' + (pts[i].y - 8) + '" font-size="9" fill="#1a6fa8" text-anchor="middle" font-weight="700">' + (x.meters / 1000).toFixed(1) + '</text>';
+  }).join('');
+  const lineV = '<defs><linearGradient id="volGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1a6fa8" stop-opacity="0.35"/><stop offset="100%" stop-color="#1a6fa8" stop-opacity="0.03"/></linearGradient></defs>'
+    + '<path d="' + curve(true) + '" fill="url(#volGrad)"/>'
+    + '<path d="' + curve(false) + '" fill="none" stroke="#1a4a7a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
+    + dotsV;
+  const t1 = document.createElement('div'); t1.className = 'section-title'; t1.textContent = 'VOLUMEN · 14 DÍAS (km)';
+  wrap.appendChild(t1);
+  wrap.appendChild(mkCard(grid + xLabelsV + lineV, 'Últimos 7 días: ' + fmt(sum7) + ' m · 7 días previos: ' + fmt(prev7) + ' m' + delta + '. Los turnos de Físico no suman metros.'));
+
+  // ── Intensidad planificada ──
+  const yr = function(v) { return PAD.top + iH - ((v - 1) / 9) * iH; };
+  const gridR = [3, 5, 7, 10].map(function(v) { return '<line x1="' + PAD.left + '" y1="' + yr(v) + '" x2="' + (PAD.left + iW) + '" y2="' + yr(v) + '" stroke="rgba(100,140,180,0.18)" stroke-width="1"/><text x="' + (PAD.left - 5) + '" y="' + (yr(v) + 3) + '" font-size="9" fill="#3a5a7a" text-anchor="end">' + v + '</text>'; }).join('');
+  const barsR = days.map(function(x, i) {
+    if (x.rpe == null) return '';
+    const bx = PAD.left + bw * i + bw * 0.18, bwid = bw * 0.64, by = yr(x.rpe);
+    return '<rect x="' + bx + '" y="' + by + '" width="' + bwid + '" height="' + (PAD.top + iH - by) + '" rx="3" fill="' + rpeColor(Math.round(x.rpe)) + '"><title>' + x.date + ' · RPE objetivo ' + x.rpe + (x.n > 1 ? ' (' + x.n + ' turnos)' : '') + '</title></rect>'
+      + '<text x="' + (bx + bwid / 2) + '" y="' + (by - 3) + '" font-size="8" fill="#1a4a7a" text-anchor="middle" font-weight="700">' + x.rpe + '</text>';
+  }).join('');
+  const t2 = document.createElement('div'); t2.className = 'section-title'; t2.style.marginTop = '14px'; t2.textContent = 'INTENSIDAD PLANIFICADA · 14 DÍAS';
+  wrap.appendChild(t2);
+  wrap.appendChild(mkCard(gridR + xLabels + barsR, 'RPE objetivo que pones en cada sesión. En días con varios turnos, media ponderada por duración.'));
+  return wrap;
 }
 
 // ============================================================
