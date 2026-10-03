@@ -6139,6 +6139,12 @@ function buildAthleteInicio() {
 // ============================================================
 function buildAthleteRPE() {
   const d = document.createElement('div');
+  // Botones con relieve, igual que el check-in: mismo color; el "apagado" es el color al 50%.
+  const keycap = function(hex, on) {
+    const rgb = [1,3,5].map(function(k){ return parseInt(hex.substr(k,2),16); }).join(',');
+    return 'border:2px solid '+(on?'rgba(0,0,0,0.45)':'transparent')+';color:#fff;text-shadow:0 1px 1px rgba(0,0,0,0.25);opacity:1;filter:none;transition:transform .12s,box-shadow .12s;background:linear-gradient(180deg,rgba(255,255,255,0.30),rgba(255,255,255,0) 55%),'+(on?hex:'rgba('+rgb+',0.5)')+';'+(on?'transform:scale(1.06);box-shadow:0 2px 0 rgba(0,0,0,0.28),0 5px 10px rgba(0,0,0,0.2),inset 0 1px 0 rgba(255,255,255,0.5)':'box-shadow:0 2px 0 rgba(0,0,0,0.14),0 3px 6px rgba(0,0,0,0.10),inset 0 1px 0 rgba(255,255,255,0.45)');
+  };
+  const tabShadow = '0 2px 0 rgba(0,0,0,0.18),0 3px 8px rgba(0,0,0,0.12),inset 0 1px 0 rgba(255,255,255,0.35)';
   const st = document.createElement('div'); st.className = 'section-title'; st.textContent = 'MI RPE';
   d.appendChild(st);
 
@@ -6151,6 +6157,7 @@ function buildAthleteRPE() {
   [[today, 'Hoy'], [yesterday, 'Ayer']].forEach(function(pair) {
     const btn = document.createElement('button');
     btn.className = 'pack-btn' + (S.rpeDate === pair[0] ? ' active' : '');
+    btn.style.boxShadow = tabShadow;
     btn.textContent = pair[1];
     btn.onclick = function() { S.rpeDate = pair[0]; S.rpeSlot = null; S.rpeSelected = null; S.fatigueSelected = null; S.rpeNote = ''; render(); };
     dateTabs.appendChild(btn);
@@ -6196,6 +6203,7 @@ function buildAthleteRPE() {
       const done = entry && entry[pair[0]];
       const btn = document.createElement('button');
       btn.className = 'pack-btn' + (S.rpeSlot === pair[0] ? ' active' : '');
+      btn.style.boxShadow = tabShadow;
       btn.innerHTML = pair[1] + (done ? ' ✓' : '');
       btn.onclick = function() { S.rpeSlot = pair[0]; S.rpeSelected = null; S.fatigueSelected = null; S.rpeNote = ''; render(); };
       slotTabs.appendChild(btn);
@@ -6230,8 +6238,8 @@ function buildAthleteRPE() {
   d.appendChild(st1);
   const rpeGrid = document.createElement('div'); rpeGrid.className = 'rpe-grid';
   for (let v = 1; v <= 10; v++) {
-    const btn = document.createElement('button'); btn.className = 'rpe-btn' + (S.rpeSelected===v?' selected':'');
-    btn.textContent = v; btn.style.background = rpeColor(v); btn.style.color = '#fff';
+    const btn = document.createElement('button'); btn.className = 'rpe-btn';
+    btn.textContent = v; btn.style.cssText = 'height:46px;padding:0;font-size:1.2rem;font-weight:800;' + keycap(rpeColor(v), S.rpeSelected===v);
     btn.onclick = () => { S.rpeSelected = v; render(); };
     rpeGrid.appendChild(btn);
   }
@@ -6243,11 +6251,8 @@ function buildAthleteRPE() {
   const fatGrid = document.createElement('div'); fatGrid.className = 'fatigue-grid';
   FATIGUE.forEach(f => {
     const sel = S.fatigueSelected===f.v;
-    const btn = document.createElement('button'); btn.className = 'fatigue-btn' + (sel?' selected':'');
-    btn.textContent = f.label; btn.style.background = f.color; btn.style.color = '#fff';
-    btn.style.opacity = sel ? '1' : '0.92';
-    btn.style.borderColor = sel ? 'rgba(0,0,0,0.55)' : 'transparent';
-    btn.style.fontWeight = sel ? '700' : '600';
+    const btn = document.createElement('button'); btn.className = 'fatigue-btn';
+    btn.textContent = f.label; btn.style.cssText = 'height:42px;padding:0 6px;font-size:0.88rem;font-weight:' + (sel ? '800' : '700') + ';' + keycap(f.color, sel);
     btn.onclick = () => { S.fatigueSelected = f.v; render(); };
     fatGrid.appendChild(btn);
   });
