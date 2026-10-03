@@ -2097,20 +2097,25 @@ function formatDateLabel(s) {
 function parseMeters(text) {
   if (!text) return 0;
   // Expand block multipliers: Nx{ ... } before line-by-line parsing
-  text = text.replace(/(\d+)\s*[xX×]\s*\{([^}]*)\}/g, (_, mult, inner) => {
-    const n = parseInt(mult);
-    return inner.trim().split('\n').map(line => {
-      const t = line.trim();
-      if (!t) return '';
-      // If line is NxD, multiply reps by block multiplier
-      const m = t.match(/^(\d+)\s*[xX×]\s*(\d+)(.*)/);
-      if (m) return (parseInt(m[1]) * n) + 'x' + m[2] + (m[3] || '');
-      // If bare distance line
-      const b = t.match(/^(\d+)(.*)/);
-      if (b) return (parseInt(b[1]) * n) + (b[2] || '');
-      return t;
-    }).filter(Boolean).join('\n');
-  });
+  // Anidables: se resuelve primero el bloque más interno y luego el externo.
+  for (let _g = 0; _g < 20; _g++) {
+    const prev = text;
+    text = text.replace(/(\d+)\s*[xX×]\s*\{([^{}]*)\}/g, (_, mult, inner) => {
+      const n = parseInt(mult);
+      return inner.trim().split('\n').map(line => {
+        const t = line.trim();
+        if (!t) return '';
+        // If line is NxD, multiply reps by block multiplier
+        const m = t.match(/^(\d+)\s*[xX×]\s*(\d+)(.*)/);
+        if (m) return (parseInt(m[1]) * n) + 'x' + m[2] + (m[3] || '');
+        // If bare distance line
+        const b = t.match(/^(\d+)(.*)/);
+        if (b) return (parseInt(b[1]) * n) + (b[2] || '');
+        return t;
+      }).filter(Boolean).join('\n');
+    });
+    if (text === prev) break;
+  }
   let total = 0;
   text.split('\n').forEach(line => {
     const t = line.trim();
@@ -2243,12 +2248,32 @@ function contrastText(hex) {
 // ============================================================
 function renderTextWithNotes(text) {
   if (!text) return '';
-  // Bloques con llaves "N×{ … }" (los mismos que multiplica parseMeters): se
-  // convierten al formato de indentación. Sin "}" de cierre no se tocan.
-  text = text.replace(/(\d+)\s*[xX×]\s*\{([^}]*)\}/g, function(mm, n, inner, off, full) {
-    const hayMas = full.slice(off + mm.length).trim() !== '';
-    return '\n' + n + '×\n' + inner.trim() + (hayMas ? '\n\n' : '');
-  });
+  return renderBraceBlocks(text);
+}
+// Bloques con llaves "N×{ … }", anidables (los mismos que multiplica parseMeters).
+// Cada bloque: "N×" y debajo una línea vertical con su contenido. Sin "}" de
+// cierre el texto se deja tal cual.
+function renderBraceBlocks(s, nivel) {
+  nivel = nivel || 0;
+  const col = nivel === 0 ? '#0a4fc4' : 'var(--accent2)';
+  const re = /(\d+)\s*[xX×]\s*\{/g;
+  let html = '', pos = 0, m;
+  while ((m = re.exec(s))) {
+    let depth = 1, i = re.lastIndex;
+    for (; i < s.length && depth > 0; i++) {
+      if (s[i] === '{') depth++; else if (s[i] === '}') depth--;
+    }
+    if (depth !== 0) continue;
+    html += renderPlainBlocks(s.slice(pos, m.index).replace(/\s+$/, ''));
+    html += '<span style="display:block;color:' + col + ';font-weight:700;letter-spacing:1px;margin-top:2px">' + m[1] + '×</span>'
+          + '<span style="display:block;border-left:2px solid ' + col + ';margin-left:6px;padding-left:12px;margin-bottom:2px">'
+          + renderBraceBlocks(s.slice(re.lastIndex, i - 1).trim(), nivel + 1) + '</span>';
+    pos = i; re.lastIndex = i;
+  }
+  return html + renderPlainBlocks(s.slice(pos).replace(/^\s+/, ''));
+}
+function renderPlainBlocks(text) {
+  if (!text) return '';
   // Modelo de bloque por indentación (sin llaves):
   //   - Una línea que empieza con "N×" o "Nx" abre un bloque de repetición.
   //   - Las líneas siguientes pertenecen al bloque (se muestran sangradas).
@@ -3702,10 +3727,13 @@ async function openCoachAdminModal() {
 // Cada dispositivo recuerda en localStorage cuál fue la última que vio.
 // ============================================================
 const CHANGELOG = [
-  { v: 8, date: '2026-09-29', text: '🏋️ Nuevo turno Físico: un día puede tener Mañana + Tarde + Físico (gym). Cada turno lleva su propio RPE y la carga del día (ACWR) suma los tres.' },
-  { v: 7, date: '2026-09-06', text: '📱 Cambiamos el ícono de la app. Si en tu pantalla de inicio seguís viendo el viejo: borrá el acceso directo y volvé a hacer "Agregar a inicio" desde Safari — iOS no lo actualiza solo.' },
-  { v: 6, date: '2026-09-04', text: '🩸 Nuevo: test de lactato progresivo (curva, umbrales, zonas) — se hace desde el botón 🩸 en la fila de cada atleta en RPE.' },
-  { v: 4, date: '2026-08-31', text: 'Nuevo: login con Google en la pantalla de crear cuenta de entrenador.' }
+  { v: 9, date: '2026-10-03', text: '🧱 Nuevo: bloques de series con llaves, y se pueden anidar. Cada bloque se ve con su <b>N×</b> y una línea vertical, y los metros se multiplican solos.'
+    + '<span style="display:block;white-space:pre;font-family:monospace;font-size:0.76rem;margin:8px 0 2px">4x{\n1x200 pull\n1x100 tabla\n}</span>'
+    + '<span style="display:block;font-size:0.76rem;margin-bottom:8px">→ 1200 m</span>'
+    + 'Uno dentro de otro:'
+    + '<span style="display:block;white-space:pre;font-family:monospace;font-size:0.76rem;margin:8px 0 2px">2x{\n  2x{\n    4x50\n    2x100\n  }\n  2x200\n  2x{\n    4x400\n    2x50\n  }\n}</span>'
+    + '<span style="display:block;font-size:0.76rem;margin-bottom:8px">→ 9200 m</span>'
+    + 'Cada <b>{</b> necesita su <b>}</b>: si falta, ese bloque se ve como texto normal y no multiplica.' }
 ];
 function getLastSeenChangelog() {
   try { return parseInt(localStorage.getItem('ondrift_changelog_seen') || '0', 10); } catch (e) { return 0; }
