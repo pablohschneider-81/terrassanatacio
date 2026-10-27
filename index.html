@@ -4737,7 +4737,7 @@ async function loadCoachProfile() {
 
 function buildProfileSheet() {
   const p = S.coachProfile || {};
-  const forced = !p.adult_confirmed_at;   // primera vez: se pide confirmar, pero siempre se puede dejar para luego
+  const forced = !!S.coachProfile && !p.adult_confirmed_at;   // primera vez (si no se pudo leer el perfil, nunca obliga): se pide confirmar, pero siempre se puede dejar para luego
   const close = function() { S.showProfile = false; if (forced) S.profileSkipped = true; render(); };
 
   const overlay = document.createElement('div'); overlay.className = 'overlay open';
@@ -4795,6 +4795,8 @@ function buildProfileSheet() {
     cta.style.cssText = 'display:block;text-align:center;text-decoration:none;margin-top:10px';
     cta.textContent = 'Ver planes y suscribirme';
     planBox.appendChild(cta);
+  } else if (plan === 'free') {
+    planTxt.textContent = 'Gratis de por vida';
   } else {
     planTxt.textContent = 'Plan ' + (PLAN_LABELS[plan] || plan);
   }
