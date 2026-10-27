@@ -1027,6 +1027,7 @@
   .rpe-nm { flex: 1; min-width: 0; font-size: 0.9rem; font-weight: 600; color: var(--text); }
   .rpe-nm small { display: block; font-size: 0.72rem; font-weight: 500; color: var(--text2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .rpe-nm small.pending { font-style: italic; }
+  .rpe-nm small.rpe-note { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
   .rpe-cdot { display: inline-flex; vertical-align: -2px; margin-left: 6px; color: var(--accent); }
   .rpe-row .delta { width: 26px; text-align: right; font-size: 0.82rem; font-weight: 700; }
   .rpe-more { all: unset; box-sizing: border-box; width: 36px; height: 36px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 11px; color: var(--text2); background: rgba(255,255,255,0.7); border: 1px solid rgba(255,255,255,0.95); box-shadow: var(--glass-shadow-sm); cursor: pointer; }
@@ -1358,6 +1359,25 @@
   .news-card .btn { margin-top: 12px; flex: none; }
   /* Texto largo: vidrio casi opaco para leer cómodo */
   .news-ov .card.news-card { background: linear-gradient(165deg, rgba(252,254,255,0.94), rgba(244,250,255,0.88)) !important; }
+</style>
+<style id="mensaje-grupo">
+  /* ---------- Mensaje al grupo ---------- */
+  .tm-card { padding: 14px 16px; margin-bottom: 14px; border-left: 4px solid var(--accent) !important; }
+  .tm-eb { display: flex; align-items: center; gap: 6px; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent2); }
+  .tm-eb .tm-new { font-size: 0.58rem; padding: 2px 6px; border-radius: 99px; background: var(--red); color: #fff; letter-spacing: 0.04em; }
+  .tm-eb .tm-when { margin-left: auto; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--text2); }
+  .tm-text { font-size: 0.95rem; line-height: 1.5; color: var(--text); margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .tm-ok { margin-top: 10px; }
+  .tm-compose textarea { min-height: 90px; margin-top: 8px; }
+  .tm-count { font-size: 0.68rem; color: var(--text2); text-align: right; margin-top: 4px; }
+  .tm-list { margin-top: 14px; }
+  .tm-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+  .tm-item .tm-body { flex: 1; min-width: 0; }
+  .tm-item .tm-date { font-size: 0.68rem; color: var(--text2); }
+  .tm-item .tm-t { font-size: 0.84rem; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
+  .tm-del { all: unset; box-sizing: border-box; cursor: pointer; width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 99px; color: var(--red2); background: rgba(229,72,77,0.08); border: 1px solid rgba(229,72,77,0.2); }
+  .tm-del svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+  .tm-del:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -1946,13 +1966,24 @@ async function dbLoadSessionMonth(ym) {
 }
 
 // ── RPE ────────────────────────────────────────────────────
+// PostgREST devuelve como máximo 1000 filas por petición: pedimos por páginas hasta traerlo todo.
+async function sbFetchAll(path) {
+  const PAGE = 1000; let all = [];
+  for (let i = 0; i < 50; i++) {
+    const rows = await sbFetch(path + '&limit=' + PAGE + '&offset=' + (i * PAGE));
+    if (!rows) return all.length ? all : null;
+    all = all.concat(rows);
+    if (rows.length < PAGE) break;
+  }
+  return all;
+}
 let _rpeCache = {};
 let _rpeRangeLoaded = false;
 async function dbGetRPERange(days) {
   // 1 sola petición para los últimos N días, agrupada por fecha en cliente
   const from = new Date(); from.setDate(from.getDate() - (days - 1));
   const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
-  const rows = await sbFetch('rpe_entries?date=gte.' + fromS + '&select=*,athletes(name)&order=date');
+  const rows = await sbFetchAll('rpe_entries?date=gte.' + fromS + '&select=*,athletes(name)&order=date,id');
   const byDate = {};
   (rows || []).forEach(r => {
     const name = r.athletes?.name;
@@ -2211,7 +2242,7 @@ async function dbGetAllAthleteHist() {
   await ensureSessionsLoaded();
   const from = new Date(); from.setDate(from.getDate() - 27);
   const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
-  const rows = await sbFetch('rpe_entries?select=date,slot,rpe,fatigue,athletes(name)&date=gte.' + fromS + '&order=date.asc');
+  const rows = await sbFetchAll('rpe_entries?select=date,slot,rpe,fatigue,athletes(name)&date=gte.' + fromS + '&order=date.asc,id.asc');
   const map = {};
   if (!rows) return map;
   rows.forEach(function(r) {
@@ -2733,7 +2764,7 @@ function resetSession() {
   // dispositivo del nadador, con su propia opción "Cambiar de equipo".
   S.role = null; S.athleteName = null; S.isAdmin = false;
   S.showCoachAdmin = false; S.coachList = null; S.myTeamCode = null;
-  S.coachStatus = null; S.coachEmail = null;
+  S.coachStatus = null; S.coachEmail = null; S.coachProfile = undefined; S.showProfile = false;
   S.tab = 0; S.ath_tab = 0;
   S._cstrLoading = false; S._strLoading = false;
 }
@@ -2818,6 +2849,7 @@ async function loadData() {
     dbGetComments().then(c => { DATA.comments = c; }),
     dbGetCompetitions().then(c => { DATA.competitions = c; }),
     dbGetEvents().then(e => { DATA.events = e; }),
+    dbGetTeamMessages().then(m => { DATA.teamMessages = m; }),
     dbGetInscriptions().then(i => { DATA.inscriptions = i; }),
     dbGetDayWellness(todayStr()).then(w => { DATA.wellness[todayStr()] = w; })
   ];
@@ -3070,7 +3102,7 @@ function renderPlainBlocks(text) {
     // Línea normal (dentro o fuera de bloque)
     const indent = insideBlock ? '  ' : '';
     const parts = line.split(/(@[^@\n]+)/g);
-    const rendered = parts.map(p => p.startsWith('@') ? `<span class="at-note">${p}</span>` : p).join('');
+    const rendered = parts.map(p => p.startsWith('@') ? `<span class="at-note">${escapeHtml(p)}</span>` : escapeHtml(p)).join('');
     out.push('\n' + indent + rendered.trim());
   }
   return out.join('').replace(/^\n+/, '').replace(/\n{3,}/g, '\n\n');
@@ -3078,7 +3110,7 @@ function renderPlainBlocks(text) {
 function renderInlineNotes(text) {
   if (!text) return '';
   return text.split(/(@[^@\n]+)/g)
-    .map(p => p.startsWith('@') ? `<span class="at-note">${p}</span>` : p).join('');
+    .map(p => p.startsWith('@') ? `<span class="at-note">${escapeHtml(p)}</span>` : escapeHtml(p)).join('');
 }
 
 
@@ -3511,7 +3543,7 @@ function buildAthleteStrength() {
   S.strInput = S.strInput || {};
 
   const intro = document.createElement('div'); intro.className = 'card'; intro.style.marginBottom = '16px';
-  intro.innerHTML = '<div class="card-title">' + (sessObj.title || 'Físico · hoy') + '</div>'
+  intro.innerHTML = '<div class="card-title">' + escapeHtml(sessObj.title || 'Físico · hoy') + '</div>'
     + '<div class="card-sub">Registra el peso, las reps y el RIR de tu serie principal. Tu 1RM va subiendo con el tiempo.</div>';
   d.appendChild(intro);
 
@@ -3539,6 +3571,13 @@ function buildAthleteStrength() {
       + '</div>';
     card.appendChild(head);
 
+    // ejercicios con peso corporal (Pull-up): se registra SOLO el lastre
+    if (ex.uses_bodyweight) {
+      const bwHint = document.createElement('div');
+      bwHint.style.cssText = 'font-size:0.78rem;color:var(--text2);margin-bottom:12px';
+      bwHint.textContent = 'Pon solo el lastre que añades, sin tu peso corporal. Sin lastre: 0.';
+      card.appendChild(bwHint);
+    }
     // nota del coach para esta categoría (Pull/Push/Lower Body) — si escribió algo
     if (noteTxt) {
       const note = document.createElement('div');
@@ -3549,7 +3588,7 @@ function buildAthleteStrength() {
 
     // inputs carga / reps / rir
     const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:10px;margin-bottom:10px';
-    [['load', 'Carga', 'kg'], ['reps', 'Reps', ''], ['rir', 'RIR', '']].forEach(function (f) {
+    [['load', ex.uses_bodyweight ? 'Lastre' : 'Carga', 'kg'], ['reps', 'Reps', ''], ['rir', 'RIR', '']].forEach(function (f) {
       const wrap = document.createElement('div'); wrap.style.flex = '1';
       const lbl = document.createElement('div'); lbl.className = 'field-label'; lbl.textContent = f[1] + (f[2] ? ' (' + f[2] + ')' : '');
       const inp = document.createElement('input'); inp.type = 'number'; inp.inputMode = 'decimal';
@@ -3559,6 +3598,18 @@ function buildAthleteStrength() {
     });
     card.appendChild(row);
 
+    // por qué una serie guardada puede no contar para el 1RM
+    if (saved) {
+      let why = '';
+      if (saved.rir !== 0) why = 'Esta serie no cuenta para tu 1RM: solo cuentan las series con RIR 0.';
+      else if (ex.uses_bodyweight && lastRm == null) why = 'Falta tu peso corporal para calcular el 1RM: pídeselo a tu entrenador.';
+      if (why) {
+        const whyEl = document.createElement('div');
+        whyEl.style.cssText = 'font-size:0.78rem;color:var(--text2);margin-bottom:10px';
+        whyEl.textContent = why;
+        card.appendChild(whyEl);
+      }
+    }
     // tendencia
     if (trend.length >= 2) {
       const sp = document.createElement('div'); sp.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:10px';
@@ -3572,6 +3623,7 @@ function buildAthleteStrength() {
     btn.onclick = function () {
       const v = S.strInput[ex.id];
       if (v.load === '' || v.reps === '') { alert('Pon al menos carga y reps'); return; }
+      if (ex.uses_bodyweight && Number(v.load) > 25 && !confirm('Pon solo el lastre que añades, sin tu peso corporal. ¿Seguro que añades ' + v.load + ' kg?')) return;
       btn.disabled = true; btn.textContent = 'Guardando…';
       dbSaveStrengthSet(S.athleteName, ex.id, Number(v.load), Number(v.reps), v.rir === '' ? null : Number(v.rir), sessionId)
         .then(function (res) {
@@ -3613,6 +3665,7 @@ function render() {
 
   app.appendChild(buildHeader());
   if (S.showChangelog) app.appendChild(buildChangelogPanel());
+  if (S.role === 'coach' && (S.showProfile || (S.coachProfile && !S.coachProfile.adult_confirmed_at))) app.appendChild(buildProfileSheet());
   const content = document.createElement('div');
   content.className = 'content';
 
@@ -4539,12 +4592,15 @@ async function openCoachAdminModal() {
 // Cada dispositivo recuerda en localStorage cuál fue la última que vio.
 // ============================================================
 const CHANGELOG = [
+  { v: 16, date: '2026-10-27', role: 'athlete', text: '<div class="nt">Mensajes de tu entrenador</div><ul><li>Cuando tu entrenador escriba al grupo, lo verás <b>arriba en Inicio</b> con un punto rojo hasta que lo leas.</li></ul>' },
+  { v: 15, date: '2026-10-27', role: 'coach', text: '<div class="nt">Mensaje al grupo</div><ul><li>En <b>Más → Equipo</b> puedes escribir un mensaje a todos tus nadadores (motivación, avisos…). Les aparece arriba en Inicio con un punto rojo hasta que lo leen.</li><li>Ahí mismo ves los últimos mensajes y puedes borrarlos.</li></ul>' },
+  { v: 14, date: '2026-10-26', role: 'coach', text: '<div class="nt">Tu perfil</div><ul><li>Toca tu <b>inicial</b> (arriba a la derecha) para poner tu nombre, ver tu plan y confirmar que eres mayor de edad.</li></ul>' },
   { v: 13, date: '2026-10-26', role: 'athlete', text: '<div class="nt">Para ti, nadador</div><ul>'
     + '<li>En <b>Inicio</b> ves tu <b>sesión de hoy</b> con los metros de cada bloque y un botón para registrar el RPE.</li>'
     + '<li><b>Esta semana</b>: tus días de lunes a domingo con el RPE que pusiste cada día.</li>'
     + '<li>Tu entrenador ahora ve tu <b>check-in de la mañana</b> comparado con tu propia media. Cuanto más sincero seas, mejor te puede ajustar el entreno.</li></ul>' },
   { v: 12, date: '2026-10-26', role: 'coach', text: '<div class="nt">Para ti, entrenador</div><ul>'
-    + '<li><b>Barra nueva</b>: Sesión, Carga, Calendario, Equipo y Más. <b>Carga</b> une RPE y Escuadra con un selector arriba; en <b>Más</b> están Inscripciones, Historial y Asistencia.</li>'
+    + '<li><b>Barra nueva</b>: Sesión, Carga, Historial, Asistencia y Más. <b>Carga</b> une RPE y Escuadra con un selector arriba; en <b>Más</b> están Calendario, Inscripciones y Equipo.</li>'
     + '<li><b>Bienestar hoy</b> (Escuadra): quién está por debajo de su media de check-in, junto a su ACWR, su último RPE y su estado. Marca <b>Ajustar hoy</b> si además tiene la carga alta, y avisa si lleva varios días cansado. Toca <b>⋯</b> para ver sus 14 días y escribirle.</li>'
     + '<li><b>ACWR por atleta</b> en tarjetas con barra de zona y puntos de color. Toca una tarjeta para ver la fecha del último RPE y el detalle.</li>'
     + '<li><b>RPE de hoy</b> en lista, con un botón <b>⋯</b> para el comentario o el test de lactato, y los que faltan aparte.</li>'
@@ -4578,7 +4634,9 @@ function buildHeader() {
   const left = document.createElement('div');
   left.className = 'header-left';
   const isCoach = S.role === 'coach';
-  const fullName = isCoach ? 'Entrenador' : String(S.athleteName || '');
+  const cProf = isCoach ? S.coachProfile : null;
+  if (isCoach && S.coachProfile === undefined) loadCoachProfile();
+  const fullName = isCoach ? ((cProf && cProf.display_name) || 'Entrenador') : String(S.athleteName || '');
   const txt = document.createElement('div');
   txt.className = 'hdr-text';
   const eyebrow = document.createElement('span');
@@ -4586,7 +4644,7 @@ function buildHeader() {
   eyebrow.textContent = (isCoach ? 'Entrenador' : 'Atleta') + ' · ' + formatDateLabel(todayStr());
   const title = document.createElement('span');
   title.className = 'hdr-title';
-  title.textContent = isCoach ? 'Hola, entrenador' : 'Hola, ' + (fullName.split(/\s+/)[0] || '');
+  title.textContent = (isCoach && !(cProf && cProf.display_name)) ? 'Hola, entrenador' : 'Hola, ' + (fullName.split(/\s+/)[0] || '');
   txt.appendChild(eyebrow);
   txt.appendChild(title);
   left.appendChild(txt);
@@ -4594,6 +4652,7 @@ function buildHeader() {
   const avatar = document.createElement('span');
   avatar.className = 'hdr-avatar ' + (isCoach ? 'coach' : 'athlete');
   avatar.textContent = fullName.split(/\s+/).filter(Boolean).slice(0, 2).map(function(w) { return w[0].toUpperCase(); }).join('') || 'OD';
+  if (isCoach) { avatar.style.cursor = 'pointer'; avatar.title = 'Tu perfil'; avatar.setAttribute('role', 'button'); avatar.setAttribute('aria-label', 'Tu perfil'); avatar.onclick = function() { S.showProfile = true; render(); }; }
   const right = document.createElement('div');
   right.style.cssText = 'display:flex; gap:8px; align-items:center;';
 
@@ -4627,6 +4686,139 @@ function latestChangelogV() {
   const vis = visibleChangelog();
   return vis.length ? vis[0].v : 0;
 }
+// ============================================================
+// PERFIL DEL ENTRENADOR (nombre, mayoría de edad, plan)
+// El plan y la declaración de mayoría de edad viven en la base de datos: el cliente solo los
+// lee y los muestra (no puede cambiar el plan ni deshacer la mayoría de edad).
+// ============================================================
+// Versión de la app: subir el número en cada cambio (2.0 = archivo de producción del 26-oct-2026)
+const APP_VERSION = '2.6';
+const PLAN_URL = 'https://ondrift.app/#precio';
+const LEGAL_TERMS_URL = 'https://ondrift.app/terminos-ondrift.html';
+const LEGAL_PRIVACY_URL = 'https://ondrift.app/privacidad-datos.html';
+const TRIAL_DAYS = 15;
+const PLAN_LABELS = { individual: 'Individual', duo: 'Dúo', club: 'Club' };
+
+async function coachRpc(name, body, _retry) {
+  try {
+    const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/' + name, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + SB_ACCESS_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    if ((res.status === 401 || res.status === 403) && !_retry) {
+      if (await coachSignIn()) return coachRpc(name, body, true);
+    }
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch (e) {}
+    return { ok: res.ok, data: data };
+  } catch (e) { return { ok: false, data: null }; }
+}
+
+// Si falla (p. ej. la función aún no existe), S.coachProfile se queda en null y la app
+// funciona como antes: cabecera "Hola, entrenador" y sin avisos.
+async function loadCoachProfile() {
+  S.coachProfile = null;
+  const r = await coachRpc('my_coach_profile');
+  if (S.role !== 'coach') return;
+  if (r.ok && r.data && r.data[0]) { S.coachProfile = r.data[0]; render(); }
+}
+
+function buildProfileSheet() {
+  const p = S.coachProfile || {};
+  const forced = !p.adult_confirmed_at;   // primera vez: hay que confirmar antes de seguir
+  const close = function() { S.showProfile = false; render(); };
+
+  const overlay = document.createElement('div'); overlay.className = 'overlay open';
+  if (!forced) overlay.onclick = function(e) { if (e.target === overlay) close(); };
+  const sheet = document.createElement('div'); sheet.className = 'bottom-sheet';
+  sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-label', 'Tu perfil');
+
+  const title = document.createElement('div'); title.className = 'sheet-title';
+  title.textContent = forced ? 'Antes de continuar' : 'Tu perfil';
+  if (!forced) {
+    const x = document.createElement('button'); x.className = 'sheet-close'; x.textContent = '✕'; x.onclick = close;
+    title.appendChild(x);
+  }
+  sheet.appendChild(title);
+
+  const lblName = document.createElement('label'); lblName.className = 'field-label'; lblName.textContent = 'Nombre';
+  const nameIn = document.createElement('input'); nameIn.type = 'text'; nameIn.maxLength = 60;
+  nameIn.placeholder = 'Tu nombre'; nameIn.value = p.display_name || '';
+  nameIn.style.cssText = 'width:100%;box-sizing:border-box;margin-top:4px';
+  sheet.append(lblName, nameIn);
+
+  let adultIn = null;
+  if (p.adult_confirmed_at) {
+    const ok = document.createElement('div');
+    ok.style.cssText = 'margin-top:14px;font-size:0.82rem;color:var(--text2)';
+    ok.textContent = '✓ Mayor de edad confirmado el ' + new Date(p.adult_confirmed_at).toLocaleDateString('es-ES');
+    sheet.appendChild(ok);
+  } else {
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;margin-top:14px;font-size:0.82rem;color:var(--text2);cursor:pointer;line-height:1.4';
+    adultIn = document.createElement('input'); adultIn.type = 'checkbox'; adultIn.style.marginTop = '3px';
+    const txt = document.createElement('span');
+    txt.appendChild(document.createTextNode('Declaro que soy mayor de 18 años y acepto los '));
+    const a1 = document.createElement('a'); a1.href = LEGAL_TERMS_URL; a1.target = '_blank'; a1.rel = 'noopener'; a1.textContent = 'Términos';
+    const a2 = document.createElement('a'); a2.href = LEGAL_PRIVACY_URL; a2.target = '_blank'; a2.rel = 'noopener'; a2.textContent = 'Política de privacidad';
+    txt.append(a1, document.createTextNode(' y la '), a2, document.createTextNode('.'));
+    row.append(adultIn, txt);
+    sheet.appendChild(row);
+  }
+
+  // Plan
+  const plan = p.plan || 'trial';
+  const planBox = document.createElement('div'); planBox.className = 'card'; planBox.style.cssText = 'padding:12px 14px;margin:16px 0 4px';
+  const planLbl = document.createElement('label'); planLbl.className = 'field-label'; planLbl.style.marginTop = '0'; planLbl.textContent = 'Plan';
+  const planTxt = document.createElement('div'); planTxt.style.cssText = 'font-weight:700;margin-top:4px';
+  planBox.append(planLbl, planTxt);
+  if (p.is_admin) {
+    planTxt.textContent = 'Administrador';
+  } else if (plan === 'trial') {
+    let d = null;
+    if (p.trial_start) d = TRIAL_DAYS - Math.floor((Date.now() - new Date(p.trial_start).getTime()) / 86400000);
+    planTxt.textContent = (d !== null && d > 0) ? 'Prueba gratuita · te quedan ' + d + (d === 1 ? ' día' : ' días') : 'Prueba gratuita';
+    const cta = document.createElement('a'); cta.className = 'btn btn-primary';
+    cta.href = PLAN_URL; cta.target = '_blank'; cta.rel = 'noopener';
+    cta.style.cssText = 'display:block;text-align:center;text-decoration:none;margin-top:10px';
+    cta.textContent = 'Ver planes y suscribirme';
+    planBox.appendChild(cta);
+  } else {
+    planTxt.textContent = 'Plan ' + (PLAN_LABELS[plan] || plan);
+  }
+  sheet.appendChild(planBox);
+
+  const err = document.createElement('div'); err.style.cssText = 'color:var(--red);font-size:0.8rem;margin-top:8px;min-height:1em';
+  sheet.appendChild(err);
+
+  const save = document.createElement('button'); save.className = 'btn btn-primary'; save.style.marginTop = '10px';
+  save.textContent = forced ? 'Continuar' : 'Guardar';
+  save.onclick = async function() {
+    const name = nameIn.value.trim();
+    if (forced && (!name || !adultIn || !adultIn.checked)) {
+      err.textContent = 'Escribe tu nombre y confirma que eres mayor de edad para continuar.';
+      return;
+    }
+    save.disabled = true; err.textContent = '';
+    const r = await coachRpc('save_coach_profile', { p_name: name, p_adult: !!(adultIn && adultIn.checked) });
+    if (!r.ok) { save.disabled = false; err.textContent = 'No se pudo guardar. Inténtalo de nuevo.'; return; }
+    S.showProfile = false;
+    await loadCoachProfile();
+    render();
+  };
+  sheet.appendChild(save);
+
+  const ver = document.createElement('div');
+  ver.style.cssText = 'text-align:center;font-size:0.72rem;color:var(--text2);margin-top:12px';
+  ver.textContent = 'Ondrift v' + APP_VERSION;
+  sheet.appendChild(ver);
+
+  overlay.appendChild(sheet);
+  return overlay;
+}
+
 function buildChangelogPanel() {
   const ov = document.createElement('div'); ov.className = 'news-ov';
   ov.onclick = function(e) { if (e.target === ov) { setLastSeenChangelog(latestChangelogV()); S.showChangelog = false; render(); } };
@@ -4684,13 +4876,13 @@ function buildBottomNav() {
   if (S.role === 'coach') {
     // Índices de S.tab: 0 Sesión · 1 RPE · 2 Escuadra · 3 Calendario · 4 Inscripciones · 5 Equipo · 6 Historial · 7 Asistencia
     const go = function(i) { return function() { S.tab = i; S.navMore = false; S.rpeMenuAthlete = null; S.bwDetail = null; render(); }; };
-    const MORE = [{ tab: 4, icon: 'inscr', label: 'Inscripciones' }, { tab: 6, icon: 'historial', label: 'Historial' }, { tab: 7, icon: 'asistencia', label: 'Asistencia' }];
+    const MORE = [{ tab: 3, icon: 'calend', label: 'Calendario' }, { tab: 4, icon: 'inscr', label: 'Inscripciones' }, { tab: 5, icon: 'equipo', label: 'Equipo' }];
     const inMore = MORE.some(function(m) { return m.tab === S.tab; });
     nav.appendChild(mk('sesion', 'Sesión', S.tab === 0, go(0)));
     nav.appendChild(mk('rpe', 'Carga', S.tab === 1 || S.tab === 2, go(S.lastCargaTab || 1)));
-    nav.appendChild(mk('calend', 'Calendario', S.tab === 3, go(3)));
-    nav.appendChild(mk('equipo', 'Equipo', S.tab === 5, go(5), S.isAdmin && S.pendingCoachCount > 0));
-    nav.appendChild(mk('mas', 'Más', inMore || S.navMore, function() { S.navMore = !S.navMore; render(); }));
+    nav.appendChild(mk('historial', 'Historial', S.tab === 6, go(6)));
+    nav.appendChild(mk('asistencia', 'Asistencia', S.tab === 7, go(7)));
+    nav.appendChild(mk('mas', 'Más', inMore || S.navMore, function() { S.navMore = !S.navMore; render(); }, S.isAdmin && S.pendingCoachCount > 0));
     if (S.navMore) {
       const wrap = document.createElement('div');
       const back = document.createElement('div'); back.className = 'nav-more-back';
@@ -4699,7 +4891,7 @@ function buildBottomNav() {
       MORE.forEach(function(m) {
         const b = document.createElement('button');
         b.className = 'nav-more-item' + (S.tab === m.tab ? ' active' : '');
-        b.innerHTML = `<svg viewBox="0 0 24 24">${NAV_ICONS[m.icon]}</svg><span>${m.label}</span>`;
+        b.innerHTML = `<svg viewBox="0 0 24 24">${NAV_ICONS[m.icon]}</svg><span>${m.label}</span>` + (m.icon === 'equipo' && S.isAdmin && S.pendingCoachCount > 0 ? '<span style="margin-left:auto;width:8px;height:8px;border-radius:50%;background:#e5484d;flex:none" aria-label="Entrenadores pendientes"></span>' : '');
         b.onclick = go(m.tab);
         sheet.appendChild(b);
       });
@@ -4717,7 +4909,7 @@ function buildBottomNav() {
     ];
     const pending = athleteHasPendingToday(S.athleteName);
     items.forEach(function(item, i) {
-      nav.appendChild(mk(item.icon, item.label, S.ath_tab === i, function() { S.ath_tab = i; render(); }, i === 0 && pending));
+      nav.appendChild(mk(item.icon, item.label, S.ath_tab === i, function() { S.ath_tab = i; render(); }, i === 0 && (pending || teamMsgUnseen())));
     });
   }
   return nav;
@@ -4732,7 +4924,7 @@ function autoGrow(ta) {
 }
 function makeGrowTextarea(value, placeholder) {
   const ta = document.createElement('textarea');
-  ta.className = 'ta-grow';
+  ta.className = 'ta-grow'; ta.maxLength = 4000;
   ta.placeholder = placeholder || '';
   ta.value = value || '';
   // filas iniciales según contenido (inmediato, sin esperar layout)
@@ -4750,7 +4942,7 @@ function buildCoachSession() {
   const l1 = document.createElement('label'); l1.className = 'field-label'; l1.textContent = 'Título';
   d.appendChild(l1);
   const titleIn = document.createElement('input');
-  titleIn.type = 'text'; titleIn.placeholder = 'Ej: Trabajo de velocidad'; titleIn.value = S.sessionTitle;
+  titleIn.type = 'text'; titleIn.maxLength = 100; titleIn.placeholder = 'Ej: Trabajo de velocidad'; titleIn.value = S.sessionTitle;
   titleIn.oninput = e => { S.sessionTitle = e.target.value; };
   d.appendChild(titleIn);
 
@@ -5010,8 +5202,8 @@ function buildCoachRPE() {
   const todaySlots = daySlots(session);
   if (todaySlots.length > 0) {
     sc.innerHTML = todaySlots.map(function(s) {
-      return '<div class="card-title">' + (s.label ? s.label + ' — ' : '') + s.sess.title + '</div>'
-        + '<div class="card-sub">RPE objetivo: <strong>' + s.sess.targetRPE + '</strong> · Fase: <strong>' + s.sess.phase + '</strong></div>';
+      return '<div class="card-title">' + (s.label ? s.label + ' — ' : '') + escapeHtml(s.sess.title) + '</div>'
+        + '<div class="card-sub">RPE objetivo: <strong>' + s.sess.targetRPE + '</strong> · Fase: <strong>' + escapeHtml(s.sess.phase) + '</strong></div>';
     }).join('<div style="height:8px"></div>');
   } else {
     sc.innerHTML = '<div class="card-sub">Sin sesión publicada para hoy</div>';
@@ -5065,10 +5257,10 @@ function buildCoachRPE() {
       const delta = deltaCount > 0 ? Math.round(deltaSum / deltaCount) : 0;
       const deltaStr = deltaCount > 0 ? (delta > 0 ? '+' + delta : delta < 0 ? '' + delta : '=') : '';
       const dClass = deltaCount > 0 ? deltaClass(delta) : '';
-      const note = lastSub.note ? ' · “' + escapeHtml(lastSub.note) + '”' : '';
+      const note = lastSub.note ? '<small class="rpe-note">“' + escapeHtml(lastSub.note) + '”</small>' : '';
       answeredRows.push('<div class="rpe-row"><div class="rpe-circles">' + circles + '</div>' +
         '<div class="rpe-nm">' + escapeHtml(name) + cdot + '<small><span style="color:' + fat.color + ';font-weight:600">' + fat.label + '</span>' +
-        (targetLbl ? ' · objetivo ' + targetLbl : '') + note + '</small></div>' +
+        (targetLbl ? ' · objetivo ' + targetLbl : '') + '</small>' + note + '</div>' +
         '<span class="delta ' + dClass + '">' + deltaStr + '</span>' + moreBtn + '</div>');
     } else {
       pendingRows.push('<div class="rpe-row"><div class="rpe-circles"><span class="rpe-circle rpe-empty">–</span></div>' +
@@ -5142,7 +5334,7 @@ function buildCoachRPE() {
       const toggleLeft = document.createElement('div'); toggleLeft.style.flex = '1';
       const tgSlots = daySlots(s.data);
       const tgFirst = tgSlots.length > 0 ? tgSlots[0].sess : { title: '—', phase: '—' };
-      const tgTitle = tgSlots.length > 1 ? tgFirst.title + ' (2x)' : tgFirst.title;
+      const tgTitle = tgSlots.length > 1 ? escapeHtml(tgFirst.title) + ' (2x)' : escapeHtml(tgFirst.title);
       toggleLeft.innerHTML = '<div style="font-weight:600;font-size:0.88rem">' + formatDateLabel(s.date) + '</div><div style="font-size:0.75rem;color:var(--text2);margin-top:2px">' + tgTitle + ' · <span class=\"tag\" style=\"font-size:0.65rem\">' + tgFirst.phase + '</span></div>';
       const toggleRight = document.createElement('div'); toggleRight.style.cssText = 'text-align:right;margin-right:10px';
       toggleRight.innerHTML = '<div style="font-size:0.85rem;font-weight:700;color:' + rpeColor(parseFloat(pastAvg)) + '">' + pastAvg + '</div><div style="font-size:0.65rem;color:var(--text2)">' + pastResponses.length + '/' + athletes.length + '</div>';
@@ -5265,7 +5457,7 @@ function buildLactateModal() {
       histRows.forEach(function(row) {
         const p = LACTATE_PROTOCOLS[row.protocol] || {};
         const hr = document.createElement('div'); hr.style.cssText = 'display:flex;justify-content:space-between;font-size:0.78rem;padding:6px 0;border-bottom:1px solid rgba(100,140,180,0.12);cursor:pointer';
-        hr.innerHTML = '<span>' + formatDateLabel(row.date) + ' · ' + (p.label || row.protocol) + '</span><strong>' + row.threshold_pace100 + ' →</strong>';
+        hr.innerHTML = '<span>' + formatDateLabel(row.date) + ' · ' + escapeHtml(p.label || row.protocol) + '</span><strong>' + escapeHtml(row.threshold_pace100) + ' →</strong>';
         hr.onclick = function() {
           S.lactateProtocol = row.protocol;
           S.lactateResult = {
@@ -5474,7 +5666,7 @@ function buildLactateModal() {
 async function dbGetTeamWellness(days) {
   const from = new Date(); from.setDate(from.getDate() - (days - 1));
   const fromS = from.getFullYear()+'-'+String(from.getMonth()+1).padStart(2,'0')+'-'+String(from.getDate()).padStart(2,'0');
-  const rows = await sbFetch('wellness_entries?select=date,sleep,soreness,fatigue,stress,athletes(name)&date=gte.' + fromS + '&order=date.asc');
+  const rows = await sbFetchAll('wellness_entries?select=date,sleep,soreness,fatigue,stress,athletes(name)&date=gte.' + fromS + '&order=date.asc,id.asc');
   const map = {};
   (rows || []).forEach(function(r) {
     const name = r.athletes && r.athletes.name;
@@ -6233,7 +6425,7 @@ function buildCalendar() {
     ];
     fields.forEach(f => {
       const lbl = document.createElement('label'); lbl.className = 'field-label'; lbl.textContent = f.label; form.appendChild(lbl);
-      const inp = document.createElement('input'); inp.type = f.type; inp.id = f.id; form.appendChild(inp);
+      const inp = document.createElement('input'); inp.type = f.type; inp.id = f.id; if (f.type === 'text') inp.maxLength = 120; form.appendChild(inp);
       // Pre-cargar fecha inicio y fin al día 1 del mes actual
       if (f.type === 'date') {
         const now = new Date();
@@ -6354,6 +6546,7 @@ function buildCoachTeam() {
     b.onclick = function() { S.teamView = key; render(); };
     return b;
   };
+  d.appendChild(buildTeamMessageComposer());
   toggle.append(mkToggleBtn('Nadadores', 'nadadores'), mkToggleBtn('Entrenadores', 'entrenadores'));
   d.appendChild(toggle);
 
@@ -6364,7 +6557,7 @@ function buildCoachTeam() {
   const addLbl = document.createElement('label'); addLbl.className = 'field-label'; addLbl.textContent = 'Añadir atleta';
   addCard.appendChild(addLbl);
   const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;';
-  const inp = document.createElement('input'); inp.type = 'text'; inp.placeholder = 'Nombre completo'; inp.id = 'new-athlete-name';
+  const inp = document.createElement('input'); inp.type = 'text'; inp.maxLength = 80; inp.placeholder = 'Nombre completo'; inp.id = 'new-athlete-name';
   const addBtn = document.createElement('button'); addBtn.className = 'btn btn-primary btn-sm'; addBtn.textContent = 'Añadir';
   addBtn.onclick = function() {
     const inp2 = document.getElementById('new-athlete-name');
@@ -6476,7 +6669,7 @@ function buildCoachTeam() {
       const inpConsent = document.createElement('input'); inpConsent.type = 'checkbox'; inpConsent.checked = !!athlete.consent_on_file;
       consentRow.append(inpConsent, document.createTextNode('Consentimiento parental en papel (ficha club/federación)'));
       const lbl2 = document.createElement('div'); lbl2.className = 'field-label'; lbl2.style.marginTop = '10px'; lbl2.textContent = 'NOTA (opcional, ej: "Ficha federativa 2025-26")';
-      const inpNote = document.createElement('input'); inpNote.type = 'text'; inpNote.value = athlete.consent_note || ''; inpNote.placeholder = 'Referencia del documento en papel';
+      const inpNote = document.createElement('input'); inpNote.type = 'text'; inpNote.maxLength = 200; inpNote.value = athlete.consent_note || ''; inpNote.placeholder = 'Referencia del documento en papel';
       inpNote.style.cssText = 'width:100%;box-sizing:border-box;margin-top:4px';
       const savBtn = document.createElement('button'); savBtn.className = 'btn btn-primary btn-sm'; savBtn.style.marginTop = '12px'; savBtn.textContent = 'Guardar';
       savBtn.onclick = function() {
@@ -6571,7 +6764,7 @@ function buildCoachAttendance() {
     const panel = document.createElement('div'); panel.className = 'card'; panel.style.marginBottom = '14px';
     const hdr = document.createElement('div');
     hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px';
-    hdr.innerHTML = '<div style="font-weight:700;font-size:0.9rem;color:#1a2a3a">' + (slot === 'am' ? 'Mañana' : 'Tarde') + ' — ' + (s.title || 'Sin título') + '</div>' +
+    hdr.innerHTML = '<div style="font-weight:700;font-size:0.9rem;color:#1a2a3a">' + (slot === 'am' ? 'Mañana' : 'Tarde') + ' — ' + escapeHtml(s.title || 'Sin título') + '</div>' +
       '<div style="font-size:0.72rem;color:#7a9ab8">' + roster.length + ' convocados</div>';
     panel.appendChild(hdr);
 
@@ -6738,10 +6931,10 @@ function buildCoachHistorial() {
     dateBlock.innerHTML = '<div class="hist-day-name">' + DAYS_ES[dt.getDay()] + '</div><div class="hist-day-num">' + dt.getDate() + '</div><div class="hist-month">' + MONTHS_ES[dt.getMonth()].substring(0,3) + '</div>';
     const info = document.createElement('div'); info.className = 'hist-info';
     const titleStr = hdrSlots.length > 1
-      ? first.title + ' <span style="font-size:0.7rem;color:var(--gold);font-weight:700">+ ' + hdrSlots[1].sess.title + ' (2x)</span>'
-      : (first.title || 'Sin título');
+      ? escapeHtml(first.title) + ' <span style="font-size:0.7rem;color:var(--gold);font-weight:700">+ ' + escapeHtml(hdrSlots[1].sess.title) + ' (2x)</span>'
+      : escapeHtml(first.title || 'Sin título');
     const targetStr = hdrSlots.map(function(sl){ return sl.sess.targetRPE; }).join(' / ') || '—';
-    info.innerHTML = '<div class="hist-title">' + titleStr + '</div><div class="hist-meta"><span class="tag">' + first.phase + '</span>' + (first.alphaPhase ? '<span class="tag">' + first.alphaPhase + '</span>' : '') + '<span>RPE obj: ' + targetStr + '</span></div>';
+    info.innerHTML = '<div class="hist-title">' + titleStr + '</div><div class="hist-meta"><span class="tag">' + escapeHtml(first.phase) + '</span>' + (first.alphaPhase ? '<span class="tag">' + escapeHtml(first.alphaPhase) + '</span>' : '') + '<span>RPE obj: ' + targetStr + '</span></div>';
     const arrow = document.createElement('span'); arrow.style.color = 'var(--text2)'; arrow.textContent = S.histSessionOpen[s.date] ? '▲' : '▼';
 
     // Cargar un slot concreto en el formulario de edición
@@ -6837,7 +7030,7 @@ function buildCoachHistorial() {
         if (sess2.phase === 'Fuerza') {
           if (sess2.alphaPhase) {
             const apTag = document.createElement('div'); apTag.style.marginBottom = '10px';
-            apTag.innerHTML = '<span class="tag" style="font-size:0.75rem">' + sess2.alphaPhase + '</span>';
+            apTag.innerHTML = '<span class="tag" style="font-size:0.75rem">' + escapeHtml(sess2.alphaPhase) + '</span>';
             body.appendChild(apTag);
           }
           [['Pull', sess2.pullText], ['Push', sess2.pushText], ['Lower Body', sess2.lowerText]].forEach(function(pair) {
@@ -7180,6 +7373,105 @@ function buildSquadSummaryA(acwrData) {
   return wrap;
 }
 
+// ============================================================
+// MENSAJE AL GRUPO (tabla team_messages; la base pone el coach_id del que escribe)
+// ============================================================
+async function dbGetTeamMessages() {
+  const rows = await sbFetch('team_messages?select=id,text,created_at&order=created_at.desc&limit=10');
+  return rows || [];
+}
+async function dbPostTeamMessage(text) {
+  const rows = await sbFetch('team_messages', { method: 'POST', body: JSON.stringify({ text: text }) });
+  return !!rows;
+}
+async function dbDeleteTeamMessage(id) {
+  await sbFetch('team_messages?id=eq.' + encodeURIComponent(id), { method: 'DELETE', prefer: 'return=minimal' });
+}
+function teamMsgWhen(iso) {
+  const d = new Date(iso), now = new Date();
+  const mins = Math.round((now - d) / 60000);
+  if (mins < 1) return 'ahora';
+  if (mins < 60) return 'hace ' + mins + ' min';
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24 && d.getDate() === now.getDate()) return 'hace ' + hrs + ' h';
+  return d.getDate() + ' ' + MONTHS_ES[d.getMonth()].slice(0, 3).toLowerCase() + ' · ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+// Último mensaje visible para el nadador: los de los últimos 7 días
+function latestTeamMessage() {
+  const m = (DATA.teamMessages || [])[0];
+  if (!m) return null;
+  return (Date.now() - new Date(m.created_at).getTime()) <= 7 * 86400000 ? m : null;
+}
+function teamMsgSeen() { try { return localStorage.getItem('ondrift_teammsg_seen') || ''; } catch (e) { return ''; } }
+function teamMsgUnseen() { const m = latestTeamMessage(); return !!(m && m.created_at > teamMsgSeen()); }
+
+// Nadador: tarjeta arriba en Inicio
+function buildTeamMessageCard() {
+  const m = latestTeamMessage();
+  if (!m) return null;
+  const unseen = teamMsgUnseen();
+  const card = document.createElement('div'); card.className = 'card tm-card';
+  card.innerHTML = '<div class="tm-eb">Mensaje de tu entrenador' + (unseen ? '<span class="tm-new">Nuevo</span>' : '') + '<span class="tm-when">' + teamMsgWhen(m.created_at) + '</span></div>'
+    + '<div class="tm-text">' + escapeHtml(m.text) + '</div>';
+  if (unseen) {
+    const ok = document.createElement('button'); ok.className = 'btn btn-secondary btn-sm tm-ok'; ok.textContent = 'Entendido';
+    ok.onclick = function() { try { localStorage.setItem('ondrift_teammsg_seen', m.created_at); } catch (e) {} render(); };
+    card.appendChild(ok);
+  }
+  return card;
+}
+
+// Entrenador: escribir, ver los últimos y borrar
+function buildTeamMessageComposer() {
+  const card = document.createElement('div'); card.className = 'card tm-compose';
+  card.innerHTML = '<div class="card-title">Mensaje al grupo</div><div class="card-sub">Les aparece a todos tus nadadores arriba en Inicio, con un punto rojo hasta que lo leen.</div>';
+  const ta = document.createElement('textarea'); ta.maxLength = 500; ta.placeholder = 'Ej: ¡Gran semana, equipo! Mañana descanso activo. A por el campeonato.';
+  ta.value = S.teamMsgDraft || '';
+  const count = document.createElement('div'); count.className = 'tm-count';
+  const upd = function() { S.teamMsgDraft = ta.value; count.textContent = ta.value.length + ' / 500'; };
+  ta.oninput = upd; upd();
+  const send = document.createElement('button'); send.className = 'btn btn-primary'; send.style.marginTop = '8px'; send.textContent = 'Enviar a todo el grupo';
+  send.onclick = function() {
+    const text = ta.value.trim();
+    if (!text) { showToast('Escribe el mensaje antes de enviarlo.', 'error'); return; }
+    showConfirm('¿Enviar a todo el grupo?', 'Lo verán todos tus nadadores en su Inicio.', async function() {
+      send.disabled = true; send.textContent = 'Enviando…';
+      const ok = await dbPostTeamMessage(text);
+      if (ok) {
+        S.teamMsgDraft = '';
+        DATA.teamMessages = await dbGetTeamMessages();
+        showToast('Mensaje enviado al grupo');
+      } else {
+        showToast('No se pudo enviar. Revisa la conexión e inténtalo de nuevo.', 'error');
+      }
+      render();
+    }, { okText: 'Enviar', okSafe: true });
+  };
+  card.append(ta, count, send);
+  const msgs = DATA.teamMessages || [];
+  if (msgs.length) {
+    const list = document.createElement('div'); list.className = 'tm-list';
+    list.innerHTML = '<div class="field-label" style="margin-top:0">Últimos mensajes</div>';
+    msgs.slice(0, 5).forEach(function(m) {
+      const it = document.createElement('div'); it.className = 'tm-item';
+      it.innerHTML = '<div class="tm-body"><div class="tm-date">' + teamMsgWhen(m.created_at) + '</div><div class="tm-t">' + escapeHtml(m.text) + '</div></div>';
+      const del = document.createElement('button'); del.className = 'tm-del'; del.setAttribute('aria-label', 'Borrar mensaje');
+      del.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>';
+      del.onclick = function() {
+        showConfirm('¿Borrar este mensaje?', 'Dejará de verse en el Inicio de tus nadadores.', async function() {
+          await dbDeleteTeamMessage(m.id);
+          DATA.teamMessages = await dbGetTeamMessages();
+          render();
+        }, { okText: 'Borrar' });
+      };
+      it.appendChild(del);
+      list.appendChild(it);
+    });
+    card.appendChild(list);
+  }
+  return card;
+}
+
 function buildAthleteInicio() {
   const d = document.createElement('div');
   const today = new Date();
@@ -7205,8 +7497,8 @@ function buildAthleteInicio() {
       const card = document.createElement('div'); card.className = 'card';
       card.style.cssText = 'padding:14px 16px;margin-bottom:14px';
       card.innerHTML = '<div style="font-size:0.68rem;color:#4a6a8a;letter-spacing:1px;font-weight:700;text-transform:uppercase">último test de lactato — ' + formatDateLabel(lt.date) + '</div>' +
-        '<div style="font-size:1.3rem;font-weight:800;color:#1a4a7a;margin-top:4px">' + lt.threshold_pace100 + ' /100m</div>' +
-        '<div style="font-size:0.72rem;color:var(--text2)">' + protoLbl + '</div>';
+        '<div style="font-size:1.3rem;font-weight:800;color:#1a4a7a;margin-top:4px">' + escapeHtml(lt.threshold_pace100) + ' /100m</div>' +
+        '<div style="font-size:0.72rem;color:var(--text2)">' + escapeHtml(protoLbl) + '</div>';
       d.appendChild(card);
       d.appendChild(buildLactateChart(lt.steps, { v: lt.threshold_speed, pace100: lt.threshold_pace100 }, lt.aerobic_speed ? { v: lt.aerobic_speed, pace100: lt.aerobic_pace100 } : null));
     }
@@ -7226,6 +7518,7 @@ function buildAthleteInicio() {
     '<div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,rgba(41,128,185,0.8),rgba(52,152,219,0.6));border:1.5px solid rgba(255,255,255,0.8);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:0.9rem;color:#fff;box-shadow:0 2px 12px rgba(41,128,185,0.4)">' + initials + '</div>';
   // Diseño A: el saludo y el avatar ya están en la cabecera global
   // d.appendChild(hdr);
+  const tmCard = buildTeamMessageCard(); if (tmCard) d.appendChild(tmCard);
   d.appendChild(buildTodayHeroA());
   d.appendChild(buildWeekStripA());
 
@@ -7261,7 +7554,7 @@ function buildAthleteInicio() {
   if (todayComment) {
     const cm = document.createElement('div');
     cm.style.cssText = 'background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:1px solid rgba(255,255,255,0.8);border-left:3px solid #2980b9;border-radius:12px;padding:12px 14px;margin-bottom:14px;box-shadow:0 2px 12px rgba(100,140,180,0.12)';
-    cm.innerHTML = '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#2980b9;margin-bottom:4px">MENSAJE DEL ENTRENADOR</div><div style="font-size:0.88rem;color:#1a2a3a">' + todayComment + '</div>';
+    cm.innerHTML = '<div style="font-size:0.62rem;font-weight:800;letter-spacing:1.5px;color:#2980b9;margin-bottom:4px">MENSAJE DEL ENTRENADOR</div><div style="font-size:0.88rem;color:#1a2a3a">' + escapeHtml(todayComment) + '</div>';
     d.appendChild(cm);
   }
 
@@ -7445,7 +7738,7 @@ function buildAthleteInicio() {
       const rowDet = document.createElement('details'); rowDet.style.cssText = 'margin-top:8px;border-top:1px solid rgba(100,140,180,0.15);padding-top:8px';
       const rowSum = document.createElement('summary'); rowSum.style.cssText = 'font-size:0.8rem;cursor:pointer;display:flex;justify-content:space-between';
       const p = LACTATE_PROTOCOLS[row.protocol] || {};
-      rowSum.innerHTML = '<span>' + formatDateLabel(row.date) + ' · ' + (p.label || row.protocol) + '</span><strong>' + row.threshold_pace100 + '</strong>';
+      rowSum.innerHTML = '<span>' + formatDateLabel(row.date) + ' · ' + escapeHtml(p.label || row.protocol) + '</span><strong>' + escapeHtml(row.threshold_pace100) + '</strong>';
       rowDet.appendChild(rowSum);
       rowDet.appendChild(buildLactateChart(row.steps, { v: row.threshold_speed, pace100: row.threshold_pace100 }, row.aerobic_speed ? { v: row.aerobic_speed, pace100: row.aerobic_pace100 } : null));
       det.appendChild(rowDet);
@@ -7510,7 +7803,7 @@ function buildAthleteRPE() {
   const sessionCard = document.createElement('div'); sessionCard.className = 'card'; sessionCard.style.marginBottom='16px';
   if (slots.length > 0) {
     sessionCard.innerHTML = slots.map(function(s) {
-      return '<div class="card-title">' + (s.label ? s.label + ' — ' : '') + s.sess.title + '</div>'
+      return '<div class="card-title">' + (s.label ? s.label + ' — ' : '') + escapeHtml(s.sess.title) + '</div>'
         + '<div class="card-sub">RPE objetivo: <strong>' + s.sess.targetRPE + '</strong></div>';
     }).join('<div style="height:6px"></div>');
   } else {
@@ -7583,7 +7876,7 @@ function buildAthleteRPE() {
   // Note
   const noteLbl = document.createElement('label'); noteLbl.className = 'field-label'; noteLbl.style.marginTop='16px'; noteLbl.textContent = 'Nota (opcional)';
   d.appendChild(noteLbl);
-  const noteIn = document.createElement('input'); noteIn.type='text'; noteIn.placeholder='¿Algo que destacar?'; noteIn.value=S.rpeNote;
+  const noteIn = document.createElement('input'); noteIn.type='text'; noteIn.maxLength=300; noteIn.placeholder='¿Algo que destacar?'; noteIn.value=S.rpeNote;
   noteIn.oninput = e => { S.rpeNote = e.target.value; };
   d.appendChild(noteIn);
 
@@ -7660,7 +7953,7 @@ function buildAthleteSession() {
 
     // Header clicable
     const titles = slots.length > 0
-      ? slots.map(function(s){ return (s.label ? s.label + ' ' : '') + s.sess.title; }).join(' · ')
+      ? slots.map(function(s){ return (s.label ? s.label + ' ' : '') + escapeHtml(s.sess.title); }).join(' · ')
       : 'Sin sesión';
     const totalM = slots.reduce(function(acc, slotObj) {
       const sess = slotObj.sess;
@@ -7702,7 +7995,7 @@ function buildAthleteSession() {
           body.appendChild(slotHdr);
         }
         if (sess.phase === 'Fuerza') {
-          if (sess.alphaPhase) { const ap = document.createElement('div'); ap.innerHTML = '<span class="tag" style="margin-bottom:8px">' + sess.alphaPhase + '</span>'; body.appendChild(ap); }
+          if (sess.alphaPhase) { const ap = document.createElement('div'); ap.innerHTML = '<span class="tag" style="margin-bottom:8px">' + escapeHtml(sess.alphaPhase) + '</span>'; body.appendChild(ap); }
           [['Pull', sess.pullText],['Push', sess.pushText],['Lower Body', sess.lowerText]].forEach(function(pair) {
             if (!pair[1]) return;
             const ss = document.createElement('div'); ss.className = 'session-section';
@@ -7869,14 +8162,14 @@ function buildResultForm(comp) {
   }
 
   wrap.innerHTML = '<div style="font-size:0.78rem;font-weight:700;color:var(--gold);margin-bottom:10px">' + escapeHtml(comp.name) + ' — ' + escapeHtml(comp.type) + '</div>'
-    + field('Prueba (ej. 100m Crol)', '<input id="rf-prueba" type="text" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="100m Crol">')
-    + field('Tiempo', '<input id="rf-tiempo" type="text" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="1:02.45">')
+    + field('Prueba (ej. 100m Crol)', '<input id="rf-prueba" type="text" maxlength="40" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="100m Crol">')
+    + field('Tiempo', '<input id="rf-tiempo" type="text" maxlength="20" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="1:02.45">')
     + field('¿Cómo calificarías tu rendimiento? (1-10)', '<input id="rf-rend" type="number" min="1" max="10" value="' + f.rendimiento_pct + '" style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)">')
     + field('¿Llegaste con energía suficiente?', '<div id="rf-energia">' + selectRow('energia', [{v:'si',label:'Sí'},{v:'parcial',label:'Parcial'},{v:'no',label:'No'}], f.energia) + '</div>')
     + field('¿Ejecutaste el plan de carrera?', '<div id="rf-ejecucion">' + selectRow('ejecucion_plan', [{v:'si',label:'Sí'},{v:'parcial',label:'Parcial'},{v:'no',label:'No'}], f.ejecucion_plan) + '</div>')
     + field('Nervios previos (1 tranquilo - 5 muy nervioso)', '<input id="rf-nervios" type="number" min="1" max="5" value="' + f.nervios + '" style="width:70px;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)">')
     + field('Comparado con tu mejor marca de temporada', '<div id="rf-vsmejor">' + selectRow('vs_mejor_marca', [{v:'mejor',label:'Mejor'},{v:'igual',label:'Igual'},{v:'peor',label:'Peor'}], f.vs_mejor_marca) + '</div>')
-    + field('Comentario (opcional)', '<textarea id="rf-comentario" rows="2" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="Qué cambiarías para la próxima"></textarea>')
+    + field('Comentario (opcional)', '<textarea id="rf-comentario" maxlength="1000" rows="2" style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text)" placeholder="Qué cambiarías para la próxima"></textarea>')
     + '<button id="rf-guardar" style="font-size:0.85rem;padding:9px 16px;border-radius:8px;border:none;background:var(--gold);color:#1a1a1a;font-weight:700;cursor:pointer;margin-top:4px">Guardar</button>'
     + '<button id="rf-cancelar" style="font-size:0.85rem;padding:9px 16px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;margin-top:4px;margin-left:8px">Cancelar</button>';
 
@@ -8357,7 +8650,7 @@ function buildCoachInscripcions() {
   h += '<th>Σ</th></tr></thead><tbody>';
   athletes.forEach(function(a){
     const evs = byAthlete[a.id] || [];
-    h += '<tr><td class="iname">' + a.name + '</td>';
+    h += '<tr><td class="iname">' + escapeHtml(a.name) + '</td>';
     DATA.events.forEach(function(ev){ h += '<td>' + (evs.indexOf(ev.code) !== -1 ? '<span class="ix">✕</span>' : '') + '</td>'; });
     h += '<td style="font-weight:700;color:' + (evs.length ? 'var(--green)' : 'var(--text2)') + '">' + (evs.length || '—') + '</td></tr>';
   });
@@ -8474,7 +8767,7 @@ function buildCommentSheet() {
   title.appendChild(closeBtn);
 
   const ta = document.createElement('textarea');
-  ta.value = S.commentText; ta.placeholder='Mensaje privado para este atleta...'; ta.style.marginTop='10px';
+  ta.value = S.commentText; ta.maxLength = 500; ta.placeholder='Mensaje privado para este atleta...'; ta.style.marginTop='10px';
   ta.oninput = function(e) { S.commentText = e.target.value; };
 
   const saveBtn = document.createElement('button'); saveBtn.className='btn btn-primary'; saveBtn.style.marginTop='10px'; saveBtn.textContent='Guardar mensaje';
@@ -8520,8 +8813,8 @@ function buildResultsSheet() {
       card.style.cssText = 'padding:12px 14px;margin-bottom:10px;text-align:left';
       const athName = r.athletes ? r.athletes.name : '—';
       card.innerHTML =
-        '<div style="font-weight:700;font-size:0.9rem;color:var(--text);margin-bottom:4px">' + athName + '</div>'
-        + '<div style="font-size:0.8rem;color:var(--text2);margin-bottom:6px">' + (r.prueba || '') + (r.tiempo ? ' — ' + r.tiempo : '') + '</div>'
+        '<div style="font-weight:700;font-size:0.9rem;color:var(--text);margin-bottom:4px">' + escapeHtml(athName) + '</div>'
+        + '<div style="font-size:0.8rem;color:var(--text2);margin-bottom:6px">' + escapeHtml(r.prueba || '') + (r.tiempo ? ' — ' + escapeHtml(r.tiempo) : '') + '</div>'
         + '<div style="font-size:0.75rem;color:var(--text2);display:flex;flex-wrap:wrap;gap:8px">'
         + (r.rendimiento_pct != null ? '<span>Rendimiento: <strong>' + r.rendimiento_pct + '/10</strong></span>' : '')
         + (r.energia ? '<span>Energía: <strong>' + r.energia + '</strong></span>' : '')
@@ -8529,7 +8822,7 @@ function buildResultsSheet() {
         + (r.nervios != null ? '<span>Nervios: <strong>' + r.nervios + '/5</strong></span>' : '')
         + (r.vs_mejor_marca ? '<span>Vs mejor marca: <strong>' + r.vs_mejor_marca + '</strong></span>' : '')
         + '</div>'
-        + (r.comentario ? '<div style="font-size:0.8rem;color:var(--text);margin-top:6px;font-style:italic">“' + r.comentario + '”</div>' : '');
+        + (r.comentario ? '<div style="font-size:0.8rem;color:var(--text);margin-top:6px;font-style:italic">“' + escapeHtml(r.comentario) + '”</div>' : '');
       listWrap.appendChild(card);
     });
   });
