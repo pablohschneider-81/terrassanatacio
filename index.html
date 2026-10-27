@@ -676,7 +676,7 @@
   .insc-ctrl button:disabled { opacity:0.4; cursor:default; }
   .insc-ctrl button:disabled:active { transform:none; }
 </style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <style id="diseno-a">
   /* ============================================================
      DISEÑO A · LIQUID GLASS REFINADO
@@ -1378,6 +1378,16 @@
   .tm-del { all: unset; box-sizing: border-box; cursor: pointer; width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 99px; color: var(--red2); background: rgba(229,72,77,0.08); border: 1px solid rgba(229,72,77,0.2); }
   .tm-del svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
   .tm-del:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+<style id="novedades-alto">
+  /* El botón no puede quedar pegado abajo (barra de Safari / indicador de inicio) */
+  .news-card { max-height: min(600px, calc(100vh - 56px - env(safe-area-inset-top, 0px) - 150px - env(safe-area-inset-bottom, 0px))) !important;
+               max-height: min(600px, calc(100dvh - 56px - env(safe-area-inset-top, 0px) - 150px - env(safe-area-inset-bottom, 0px))) !important; }
+  .news-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+  .news-head h3 { margin: 0 2px !important; }
+  .news-x { all: unset; box-sizing: border-box; cursor: pointer; width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center; border-radius: 99px; color: var(--text2); background: rgba(11,34,54,0.06); }
+  .news-x svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; }
+  .news-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 </style>
 </head>
 <body>
@@ -3665,7 +3675,7 @@ function render() {
 
   app.appendChild(buildHeader());
   if (S.showChangelog) app.appendChild(buildChangelogPanel());
-  if (S.role === 'coach' && (S.showProfile || (S.coachProfile && !S.coachProfile.adult_confirmed_at))) app.appendChild(buildProfileSheet());
+  if (S.role === 'coach' && (S.showProfile || (S.coachProfile && !S.coachProfile.adult_confirmed_at && !S.profileSkipped))) app.appendChild(buildProfileSheet());
   const content = document.createElement('div');
   content.className = 'content';
 
@@ -4692,8 +4702,8 @@ function latestChangelogV() {
 // lee y los muestra (no puede cambiar el plan ni deshacer la mayoría de edad).
 // ============================================================
 // Versión de la app: subir el número en cada cambio (2.0 = archivo de producción del 26-oct-2026)
-const APP_VERSION = '2.6';
-const PLAN_URL = 'https://ondrift.app/#precio';
+const APP_VERSION = '2.7';
+const PLAN_URL = 'https://ondrift.app/';
 const LEGAL_TERMS_URL = 'https://ondrift.app/terminos-ondrift.html';
 const LEGAL_PRIVACY_URL = 'https://ondrift.app/privacidad-datos.html';
 const TRIAL_DAYS = 15;
@@ -4727,8 +4737,8 @@ async function loadCoachProfile() {
 
 function buildProfileSheet() {
   const p = S.coachProfile || {};
-  const forced = !p.adult_confirmed_at;   // primera vez: hay que confirmar antes de seguir
-  const close = function() { S.showProfile = false; render(); };
+  const forced = !p.adult_confirmed_at;   // primera vez: se pide confirmar, pero siempre se puede dejar para luego
+  const close = function() { S.showProfile = false; if (forced) S.profileSkipped = true; render(); };
 
   const overlay = document.createElement('div'); overlay.className = 'overlay open';
   if (!forced) overlay.onclick = function(e) { if (e.target === overlay) close(); };
@@ -4803,12 +4813,26 @@ function buildProfileSheet() {
     }
     save.disabled = true; err.textContent = '';
     const r = await coachRpc('save_coach_profile', { p_name: name, p_adult: !!(adultIn && adultIn.checked) });
-    if (!r.ok) { save.disabled = false; err.textContent = 'No se pudo guardar. Inténtalo de nuevo.'; return; }
+    if (!r.ok) {
+      save.disabled = false;
+      const why = r.data && (r.data.message || r.data.hint);
+      console.error('save_coach_profile', r.data);
+      err.textContent = 'No se pudo guardar' + (why ? ' (' + why + ')' : '') + '. Puedes seguir usando la app y probar más tarde.';
+      return;
+    }
     S.showProfile = false;
     await loadCoachProfile();
+    // Si la base no devolvió la confirmación, no se vuelve a abrir en esta sesión
+    if (S.coachProfile && !S.coachProfile.adult_confirmed_at) S.profileSkipped = true;
     render();
   };
   sheet.appendChild(save);
+  if (forced) {
+    const later = document.createElement('button'); later.className = 'btn btn-secondary'; later.style.marginTop = '8px';
+    later.textContent = 'Ahora no';
+    later.onclick = close;
+    sheet.appendChild(later);
+  }
 
   const ver = document.createElement('div');
   ver.style.cssText = 'text-align:center;font-size:0.72rem;color:var(--text2);margin-top:12px';
@@ -4824,8 +4848,13 @@ function buildChangelogPanel() {
   ov.onclick = function(e) { if (e.target === ov) { setLastSeenChangelog(latestChangelogV()); S.showChangelog = false; render(); } };
   const card = document.createElement('div'); card.className = 'card news-card';
   card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', 'Novedades');
+  const head = document.createElement('div'); head.className = 'news-head';
   const h3 = document.createElement('h3'); h3.textContent = 'Novedades';
-  card.appendChild(h3);
+  const x = document.createElement('button'); x.className = 'news-x'; x.setAttribute('aria-label', 'Cerrar');
+  x.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  x.onclick = function() { setLastSeenChangelog(latestChangelogV()); S.showChangelog = false; render(); };
+  head.append(h3, x);
+  card.appendChild(head);
   const list = document.createElement('div'); list.className = 'news-list';
   const seen = getLastSeenChangelog();
   visibleChangelog().forEach(function(c) {
@@ -8680,29 +8709,65 @@ let _xlsxLoading = null;
 function ensureXLSX() {
   if (window.XLSX) return Promise.resolve();
   if (_xlsxLoading) return _xlsxLoading;
-  _xlsxLoading = new Promise(function(resolve, reject) {
-    const s = document.createElement('script');
-    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
-    const timer = setTimeout(function() { s.onload = s.onerror = null; reject(new Error('timeout')); }, 12000);
-    s.onload = function() { clearTimeout(timer); window.XLSX ? resolve() : reject(new Error('sin XLSX')); };
-    s.onerror = function() { clearTimeout(timer); reject(new Error('no cargó')); };
-    document.head.appendChild(s);
-  }).then(function() { _xlsxLoading = null; }, function(e) { _xlsxLoading = null; throw e; });
+  // Primero la versión con formato (negritas, colores); si no llega, la normal (sale sin formato)
+  const load = function(src) {
+    return new Promise(function(resolve, reject) {
+      const s = document.createElement('script');
+      s.src = src;
+      const timer = setTimeout(function() { s.onload = s.onerror = null; reject(new Error('timeout')); }, 12000);
+      s.onload = function() { clearTimeout(timer); window.XLSX ? resolve() : reject(new Error('sin XLSX')); };
+      s.onerror = function() { clearTimeout(timer); reject(new Error('no cargó')); };
+      document.head.appendChild(s);
+    });
+  };
+  _xlsxLoading = load('https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js').catch(function() { return load('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'); }).then(function() { _xlsxLoading = null; }, function(e) { _xlsxLoading = null; throw e; });
   return _xlsxLoading;
 }
 
-// Excel de inscripciones: una fila por nadador, una columna por prueba (✓), con año y total
+// Excel de inscripciones: título, una fila por nadador, una columna por prueba con inscritos (X), año y total
 function inscBuildWorkbook(comp, athletes, byAthlete, rows) {
-  const header = ['Nadador', 'Año'].concat(DATA.events.map(function(e){ return e.code; }), ['Nº']);
+  const used = DATA.events.filter(function(e){ return rows.some(function(i){ return i.event_code === e.code; }); });
+  const evs = used.length ? used : DATA.events;
+  const nCols = evs.length + 3;
+  const when = comp.start ? (formatDateLabel(comp.start) + (comp.end && comp.end !== comp.start ? ' – ' + formatDateLabel(comp.end) : '')) : '';
+  const title = [comp.name].concat(new Array(nCols - 1).fill(''));
+  const sub = [[when, comp.location].filter(Boolean).join(' · ')].concat(new Array(nCols - 1).fill(''));
+  const header = ['Nadador', 'Año'].concat(evs.map(function(e){ return e.code; }), ['Total']);
   const body = athletes.map(function(a){
-    const evs = byAthlete[a.id] || [];
+    const mine = byAthlete[a.id] || [];
     return [a.name, a.birth_date ? Number(String(a.birth_date).slice(0, 4)) : '']
-      .concat(DATA.events.map(function(e){ return evs.indexOf(e.code) !== -1 ? '✓' : ''; }), [evs.length || '']);
+      .concat(evs.map(function(e){ return mine.indexOf(e.code) !== -1 ? 'X' : ''; }), [mine.length || '']);
   });
-  const foot = ['TOTAL', ''].concat(DATA.events.map(function(e){ return rows.filter(function(i){ return i.event_code === e.code; }).length; }), [rows.length]);
-  const ws = XLSX.utils.aoa_to_sheet([header].concat(body, [foot]));
-  // Nombre ancho, año y pruebas estrechas
-  ws['!cols'] = [{ wch: 24 }, { wch: 6 }].concat(DATA.events.map(function(){ return { wch: 7 }; }), [{ wch: 5 }]);
+  const foot = ['TOTAL', ''].concat(evs.map(function(e){ return rows.filter(function(i){ return i.event_code === e.code; }).length; }), [rows.length]);
+  const ws = XLSX.utils.aoa_to_sheet([title, sub, [], header].concat(body, [foot]));
+  ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: nCols - 1 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: nCols - 1 } }];
+  ws['!cols'] = [{ wch: 28 }, { wch: 7 }].concat(evs.map(function(){ return { wch: 8 }; }), [{ wch: 7 }]);
+  ws['!rows'] = [{ hpt: 24 }, { hpt: 16 }, { hpt: 8 }, { hpt: 30 }];
+  // Formato (lo usa la librería con estilos; la normal lo ignora)
+  const line = { style: 'thin', color: { rgb: 'C9D6E3' } };
+  const box = { top: line, bottom: line, left: line, right: line };
+  const set = function(r, c, s) { const ref = XLSX.utils.encode_cell({ r: r, c: c }); if (!ws[ref]) ws[ref] = { t: 's', v: '' }; ws[ref].s = s; };
+  set(0, 0, { font: { bold: true, sz: 16, color: { rgb: '0B2236' } } });
+  set(1, 0, { font: { sz: 11, color: { rgb: '5B6B7B' } } });
+  for (let c = 0; c < nCols; c++) {
+    set(3, c, { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '1F6FD1' } }, border: box,
+      alignment: { horizontal: c === 0 ? 'left' : 'center', vertical: 'center', wrapText: true } });
+  }
+  body.forEach(function(row, i) {
+    const r = 4 + i;
+    const zebra = i % 2 ? { fill: { fgColor: { rgb: 'F2F7FC' } } } : {};
+    for (let c = 0; c < nCols; c++) {
+      const isMark = c >= 2 && c < nCols - 1;
+      set(r, c, Object.assign({ border: box, alignment: { horizontal: c === 0 ? 'left' : 'center', vertical: 'center' } }, zebra,
+        isMark ? { font: { bold: true, sz: 12, color: { rgb: '0B2236' } } } : c === nCols - 1 ? { font: { bold: true } } : {}));
+    }
+  });
+  const fr = 4 + body.length;
+  const top = { style: 'medium', color: { rgb: '1F6FD1' } };
+  for (let c = 0; c < nCols; c++) {
+    set(fr, c, { font: { bold: true }, fill: { fgColor: { rgb: 'E3EEFA' } }, border: { top: top, bottom: line, left: line, right: line },
+      alignment: { horizontal: c === 0 ? 'left' : 'center', vertical: 'center' } });
+  }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Inscripciones');
   return wb;
@@ -8712,7 +8777,7 @@ function inscFileName(comp) {
 }
 function buildInscShareCard(comp, athletes, byAthlete, rows) {
   const card = document.createElement('div'); card.className = 'card insc-share';
-  card.innerHTML = '<div class="t">Enviar inscripciones</div><div class="s">Excel con una fila por nadador y sus pruebas marcadas</div>';
+  card.innerHTML = '<div class="t">Enviar inscripciones</div><div class="s">Excel con una fila por nadador y sus pruebas marcadas con X</div>';
   const row = document.createElement('div'); row.className = 'row';
   const share = document.createElement('button'); share.className = 'share'; share.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 13v6h14v-6"/></svg>Compartir';
   const dl = document.createElement('button'); dl.className = 'dl'; dl.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5"/><path d="M5 19h14"/></svg>Descargar';
