@@ -2779,6 +2779,8 @@ function resetSession() {
   COACH_CREDS = null;
   try { localStorage.removeItem('ondrift_sb_token'); } catch (e) {}
   try { localStorage.removeItem('ondrift_sb_refresh'); } catch (e) {}
+  try { localStorage.removeItem('ondrift_athlete'); } catch (e) {}
+  S.rememberedAthlete = null;
   // Caché de datos
   DATA.athletes = []; DATA.sessions = {}; DATA.allSessions = [];
   DATA.rpe = {}; DATA.comments = {}; DATA.competitions = []; DATA.events = [];
@@ -3890,6 +3892,7 @@ function buildLogin() {
     const o = document.createElement('option');
     o.value = name; o.textContent = name; sel.appendChild(o);
   });
+  if (S.rememberedAthlete && getAthletes().indexOf(S.rememberedAthlete.name) !== -1) sel.value = S.rememberedAthlete.name;
   card.appendChild(sel);
 
   const btnAth = document.createElement('button');
@@ -4353,6 +4356,7 @@ function buildAthletePin() {
               }
               S.role = 'athlete';
               S.athleteName = S.pendingAthleteName;
+              try { localStorage.setItem('ondrift_athlete', JSON.stringify({ id: S.pendingAthleteId, name: S.pendingAthleteName, team: getTeamCode() })); } catch (e) {}
               S.ath_tab = 0;
               S.athletePinBuffer = '';
               // renderAsync (no render): hay que ejecutar loadData() ahora que
@@ -8966,9 +8970,33 @@ seedDemoData();
   }, true);
 })();
 
+// Recupera la sesión del nadador (token de renovación + quién es). Si no se puede, queda su nombre
+// preseleccionado y solo falta el PIN.
+async function restoreAthleteSession() {
+  if (S.role) return;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem('ondrift_athlete') || 'null'); } catch (e) {}
+  if (!saved || !saved.id || !saved.name) return;
+  const tc = getTeamCode();
+  if (!tc || (saved.team && saved.team !== tc)) return;
+  S.rememberedAthlete = saved;
+  if (await refreshAthleteSession()) {
+    S.role = 'athlete'; S.athleteName = saved.name; S.ath_tab = 0;
+    track('athlete_session_restored', {});
+  }
+}
 checkGoogleRedirect();
 track('session_start', {});
-renderAsync();
+// Con el código ya guardado, la lista de nombres NO se cargaba al abrir la app (loadData no pide nada sin rol):
+// el desplegable salía vacío y había que pulsar 'Cambiar de equipo' y volver a meter el código.
+async function loadRosterForLogin() {
+  if (S.role || !getTeamCode() || (DATA.athletes && DATA.athletes.length)) return;
+  DATA.athletes = await dbGetAthletes();
+}
+showLoading();
+restoreAthleteSession().catch(function () {})
+  .then(function () { return loadRosterForLogin(); }).catch(function () {})
+  .then(function () { renderAsync(); });
 </script>
 </body>
 </html>
