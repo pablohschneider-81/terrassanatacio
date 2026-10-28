@@ -4629,6 +4629,15 @@ async function openCoachAdminModal() {
 // Cada dispositivo recuerda en localStorage cuál fue la última que vio.
 // ============================================================
 const CHANGELOG = [
+  { v: 18, date: '2026-10-28', role: 'athlete', text: '<div class="nt">Ya no tienes que poner el PIN cada vez</div><ul>'
+    + '<li>Después de entrar una vez con tu PIN, la app <b>te recuerda</b>: al abrirla entras directamente.</li>'
+    + '<li>Si llevas mucho tiempo sin abrirla, verás <b>tu nombre ya elegido</b> y solo tendrás que poner el PIN.</li>'
+    + '<li>La lista de nombres aparece al abrir la app, sin volver a meter el código del equipo.</li>'
+    + '<li>Si tocas <b>Salir</b>, la app deja de recordarte.</li></ul>' },
+  { v: 17, date: '2026-10-28', text: '<div class="nt">Ondrift estrena logo</div><ul>'
+    + '<li>Nuevo logo: una <b>O</b> y una <b>D</b> con su estela, en los azules de la app.</li>'
+    + '<li>Al abrir la app, el logo entra girando en 3D con un destello de luz.</li>'
+    + '<li><b>Para ver el icono nuevo en tu móvil</b>: mantén pulsado el icono de Ondrift → <b>Eliminar de pantalla de inicio</b>. Luego abre ondrift.app en Safari → botón compartir → <b>Añadir a pantalla de inicio</b>.</li></ul>' },
   { v: 16, date: '2026-10-27', role: 'athlete', text: '<div class="nt">Mensajes de tu entrenador</div><ul><li>Cuando tu entrenador escriba al grupo, lo verás <b>arriba en Inicio</b> con un punto rojo hasta que lo leas.</li></ul>' },
   { v: 15, date: '2026-10-27', role: 'coach', text: '<div class="nt">Mensaje al grupo</div><ul><li>En <b>Más → Equipo</b> puedes escribir un mensaje a todos tus nadadores (motivación, avisos…). Les aparece arriba en Inicio con un punto rojo hasta que lo leen.</li><li>Ahí mismo ves los últimos mensajes y puedes borrarlos.</li></ul>' },
   { v: 14, date: '2026-10-26', role: 'coach', text: '<div class="nt">Tu perfil</div><ul><li>Toca tu <b>inicial</b> (arriba a la derecha) para poner tu nombre, ver tu plan y confirmar que eres mayor de edad.</li></ul>' },
