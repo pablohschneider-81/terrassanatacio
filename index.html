@@ -949,7 +949,7 @@
   .hero-big { font-family: var(--font-display); font-weight: 800; font-size: 2.6rem; letter-spacing: -0.03em; line-height: 1; margin-top: 8px; font-variant-numeric: tabular-nums; color: var(--text); }
   .hero-big small { font-size: 1rem; font-weight: 600; color: var(--text2); margin-left: 4px; letter-spacing: 0; }
   .hero-title { font-size: 0.86rem; color: var(--text2); margin-top: 6px; }
-  .hero-blocks { display: grid; gap: 6px; margin-top: 14px; }
+  .hero-blocks { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 14px; }
   .hero-blk { display: flex; justify-content: space-between; gap: 10px; font-size: 0.8rem; padding: 9px 12px; border-radius: var(--r-sm); background: rgba(255,255,255,0.58); }
   .hero-blk span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hero-blk b { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -7314,6 +7314,23 @@ function zoneColorA(label) {
   return { 'Riesgo': '#e5484d', 'Atención': '#d97706', 'Óptimo': '#0f9d58', 'Subcarga': '#0a84ff', 'Calibrando': '#7d93a8' }[label] || '#7d93a8';
 }
 
+// Resumen de una línea de un bloque. Si empieza con series agrupadas ("2x{"), en vez de
+// enseñar la llave se muestra la repetición y la primera línea de dentro: "2× (4x400 …)".
+function heroBlockSummary(text) {
+  const lines = String(text || '').split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+  const reps = [];
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const m = lines[i].match(/^(\d+)\s*[x×]\s*\{$/i);
+    if (m) { reps.push(m[1]); continue; }
+    if (lines[i] === '{' || lines[i] === '}') continue;
+    break;
+  }
+  const inner = (lines[i] || '').replace(/[{}]/g, '').trim();
+  if (!reps.length) return inner;
+  return reps.map(function(r) { return r + '×'; }).join(' ') + ' (' + inner + (lines.length > i + 1 ? ' …' : '') + ')';
+}
+
 // Tarjeta protagonista: la sesión de hoy con sus metros y bloques
 function buildTodayHeroA() {
   const today = todayStr();
@@ -7343,7 +7360,7 @@ function buildTodayHeroA() {
     .filter(function(b) { return parseMeters(b[1]) > 0; });
   if (blocks.length) {
     html += '<div class="hero-blocks">' + blocks.map(function(b) {
-      const first = String(b[1]).split('\n').map(function(l) { return l.trim(); }).filter(Boolean)[0] || '';
+      const first = heroBlockSummary(b[1]);
       return '<div class="hero-blk"><span>' + b[0] + (first ? ' · ' + escapeHtml(first) : '') + '</span><b>' + fmtMilesA(parseMeters(b[1])) + ' m</b></div>';
     }).join('') + '</div>';
   }
