@@ -5293,6 +5293,13 @@ function buildCoachSession() {
   pubBtn.onclick = function() {
     const btn = this;
     if (btn.disabled) return;
+    // Sin título ni ningún bloque escrito no hay entreno: publicarlo creaba sesiones
+    // "Sin título" vacías que luego salían como una lista de asistencia de más.
+    const hasText = function(v) { return String(v || '').trim() !== ''; };
+    if (!hasText(S.sessionTitle) && !['warmUp','preSet','mainSet','mainSetFondo','coolDown','pullText','pushText','lowerText'].some(function(k) { return hasText(S[k]); })) {
+      showToast('El entreno está vacío: escribe un título o algún bloque', 'error');
+      return;
+    }
     const targets = sessionPublishTargets();
     btn.disabled = true; btn.textContent = 'Comprobando…';
     sessionPublishConflicts(targets).then(function(conf) {
