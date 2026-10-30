@@ -1972,12 +1972,15 @@ async function sessionPublishConflicts(targets) {
   const rows = await sbFetch('sessions?select=date,slot,title&date=in.(' + dates.join(',') + ')');
   if (rows === null) return null;
   const ed = S.editingFrom;
+  // "Única" = un solo entreno de agua ese día: si había tarde, se borra (el físico se mantiene)
+  const unica = S.sessionSlot === 'unica';
   return rows.filter(function(r) {
-    return targets.some(function(t) { return t.date === r.date && t.slot === r.slot; });
+    return targets.some(function(t) { return t.date === r.date && (t.slot === r.slot || (unica && r.slot === 'pm')); });
   }).map(function(r) {
     r.editing = !!(ed && ed.date === r.date && ed.slot === r.slot);
+    r.remove = unica && r.slot === 'pm';
     return r;
-  }).sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+  }).sort(function(a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : (a.slot < b.slot ? -1 : 1)); });
 }
 async function dbGetAllSessions(weeks) {
   // Ventana de arranque: solo las últimas N semanas (por defecto 6).
@@ -5270,8 +5273,18 @@ function buildCoachSession() {
       S.sessionTitle=''; S.sessionRPE=6; S.sessionDuration=80; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
       S.alphaPhase=null; S.pullText=''; S.pushText=''; S.lowerText='';
       S.warmUp=''; S.preSet=''; S.mainSet=''; S.mainSetFondo=''; S.coolDown=''; S.packDays=1; S.editingFrom=null;
-      showToast('✓ Sesión publicada', 'success');
-      renderAsync();
+      const rem = S._pendingSlotRemovals || [];
+      S._pendingSlotRemovals = null;
+      if (!rem.length) { showToast('✓ Sesión publicada', 'success'); renderAsync(); return; }
+      Promise.all(rem.map(function(r) {
+        return dbDeleteSession(r.date, r.slot).then(function(rows) { return { r: r, ok: rows !== null }; });
+      })).then(function(res) {
+        _allSessionsCache = null;
+        const kept = res.filter(function(x) { return !x.ok; });
+        if (!kept.length) showToast('✓ Publicada como entreno único', 'success');
+        else showToast('✓ Publicada. La tarde del ' + kept.map(function(x) { return formatDateLabel(x.r.date); }).join(', ') + ' se mantiene: ya tiene asistencia', 'error');
+        renderAsync();
+      });
     }).catch(function() {
       btn.disabled = false; btn.textContent = 'Publicar';
       showToast('⚠ Error de conexión', 'error');
@@ -5285,14 +5298,17 @@ function buildCoachSession() {
     sessionPublishConflicts(targets).then(function(conf) {
       btn.disabled = false; btn.textContent = 'Publicar';
       if (conf === null) { showToast('⚠ No se pudo comprobar si ya hay entrenos. Reintenta', 'error'); return; }
-      if (!conf.length) { publishNow.call(btn); return; }
+      if (!conf.length) { S._pendingSlotRemovals = []; publishNow.call(btn); return; }
       const slotName = { am: 'Mañana', pm: 'Tarde', fis: 'Físico' };
       const list = conf.map(function(r) {
-        return '<li><b>' + escapeHtml(formatDateLabel(r.date)) + '</b>' + (slotName[r.slot] ? ' · ' + slotName[r.slot] : '') + ': ' + escapeHtml(r.title || 'Sin título') + '</li>';
+        return '<li><b>' + escapeHtml(formatDateLabel(r.date)) + '</b>' + (slotName[r.slot] ? ' · ' + slotName[r.slot] : '') + ': ' + escapeHtml(r.title || 'Sin título')
+          + (r.remove ? ' <i>(se borra: eliges entreno único)</i>' : '') + '</li>';
       }).join('');
+      // tardes que hay que quitar después de publicar como "Única"
+      S._pendingSlotRemovals = conf.filter(function(r) { return r.remove; }).map(function(r) { return { date: r.date, slot: r.slot }; });
       const ul = '<ul style="margin:6px 0 8px;padding-left:18px;text-align:left">' + list + '</ul>';
       // Solo el entreno abierto con el lápiz: es una edición, aviso suave
-      if (conf.length === 1 && conf[0].editing) {
+      if (conf.length === 1 && conf[0].editing && !conf[0].remove) {
         showConfirm('¿Guardar los cambios?', ul + 'Se actualizará el entreno publicado.',
           function() { publishNow.call(btn); }, { okText: 'Guardar cambios', okSafe: true });
         return;
