@@ -2370,8 +2370,12 @@ async function dbAddCompetition(comp) {
   });
   _compCache = null;
 }
-async function dbDeleteSession(date) {
-  await sbFetch('sessions?date=eq.' + date, { method: 'DELETE', prefer: 'return=minimal' });
+// slot opcional: 'am' | 'pm' | 'fis'. Sin slot borra el día entero.
+// Devuelve las filas borradas, o null si el servidor lo rechazó (antes se ignoraba
+// y la app lo daba por borrado aunque siguiera en la base).
+async function dbDeleteSession(date, slot) {
+  const rows = await sbFetch('sessions?date=eq.' + date + (slot ? '&slot=eq.' + slot : ''), { method: 'DELETE', prefer: 'return=representation' });
+  if (rows === null) return null;
   delete _sessionCache[date];
   // Misma razón que en dbSaveSession: invalidar la copia en memoria de
   // Asistencia si estaba mirando esta fecha, para no arrastrar un _id
@@ -2380,6 +2384,23 @@ async function dbDeleteSession(date) {
     S._attSessionDate = null;
   }
   // NO anulamos _allSessionsCache: el llamador la actualiza en memoria para no perder meses cargados
+  return rows;
+}
+// Quita de la caché en memoria un turno (o el día) ya borrado, sin refetch (preserva meses cargados)
+function dropSessionFromCache(date, slot) {
+  _allSessionsCache = (_allSessionsCache || []).filter(function(x) {
+    if (x.date !== date) return true;
+    if (!slot) return false;
+    x.data = Object.assign({}, x.data); x.data[slot] = null;
+    return daySlots(x.data).length > 0;
+  });
+  DATA.allSessions = _allSessionsCache;
+  DATA.sessions = {}; _allSessionsCache.forEach(function(x){ DATA.sessions[x.date] = x.data; });
+}
+function sessionDeleteError() {
+  return /foreign key|violates/i.test(SB_LAST_ERROR || '')
+    ? 'No se puede borrar: ya tiene asistencia o fuerza registrada'
+    : '⚠ No se pudo borrar. Reintenta';
 }
 async function dbSetInscWindow(compId, openDate, closeDate) {
   const body = {};
@@ -7105,17 +7126,20 @@ function buildCoachHistorial() {
     delBtn.onclick = function(ev) {
       ev.stopPropagation();
       const label = DAYS_ES[dt.getDay()] + ' ' + dt.getDate() + ' ' + MONTHS_ES[dt.getMonth()].substring(0,3);
-      showConfirm('¿Borrar el entreno del ' + label + '?', 'Se eliminará la sesión completa (mañana y tarde si las hay). No se puede deshacer.', function() {
+      const many = hdrSlots.length > 1;
+      const names = hdrSlots.map(function(sl){ return ({ am: 'mañana', pm: 'tarde', fis: 'físico' })[sl.slot]; }).join(', ');
+      showConfirm(many ? '¿Borrar todo el ' + label + '?' : '¿Borrar el entreno del ' + label + '?',
+        many ? 'Se borran los ' + hdrSlots.length + ' turnos (' + names + '). Para borrar solo uno, abre el día y usa la papelera de ese turno. No se puede deshacer.'
+             : 'No se puede deshacer.', function() {
         delBtn.disabled = true; delBtn.innerHTML = '…';
-        dbDeleteSession(s.date).then(function() {
+        dbDeleteSession(s.date).then(function(rows) {
+          if (rows === null) { showToast(sessionDeleteError(), 'error'); render(); return; }
           delete S.histSessionOpen[s.date];
-          // quitar de la caché en memoria sin refetch (preserva meses cargados)
-          _allSessionsCache = (_allSessionsCache || []).filter(function(x){ return x.date !== s.date; });
-          DATA.allSessions = _allSessionsCache;
-          DATA.sessions = {}; _allSessionsCache.forEach(function(x){ DATA.sessions[x.date] = x.data; });
+          dropSessionFromCache(s.date);
+          showToast(many ? '✓ Día borrado' : '✓ Entreno borrado', 'success');
           render();
         });
-      });
+      }, { okText: many ? 'Borrar todo' : 'Borrar' });
     };
 
     const actions = document.createElement('div');
@@ -7144,7 +7168,31 @@ function buildCoachHistorial() {
           slotEditBtn.title = 'Editar ' + (slotObj.slot === 'am' ? 'mañana' : (slotObj.slot === 'fis' ? 'físico' : 'tarde'));
           slotEditBtn.style.cssText = 'min-width:28px;height:28px;font-size:0.7rem;margin-right:0;flex-shrink:0;';
           slotEditBtn.onclick = function(ev) { ev.stopPropagation(); loadSlotForEdit(sess2, slotObj.slot); };
-          shRow.append(shLbl, slotEditBtn);
+          const slotName = slotObj.slot === 'am' ? 'mañana' : (slotObj.slot === 'fis' ? 'físico' : 'tarde');
+          const slotDelBtn = document.createElement('button');
+          slotDelBtn.className = 'sess-del-btn';
+          slotDelBtn.innerHTML = delBtn.innerHTML;
+          slotDelBtn.title = 'Borrar ' + slotName;
+          slotDelBtn.setAttribute('aria-label', 'Borrar ' + slotName);
+          slotDelBtn.style.cssText = 'min-width:28px;height:28px;font-size:0.7rem;margin-right:0;flex-shrink:0;';
+          slotDelBtn.onclick = function(ev) {
+            ev.stopPropagation();
+            const dl = DAYS_ES[dt.getDay()] + ' ' + dt.getDate() + ' ' + MONTHS_ES[dt.getMonth()].substring(0,3);
+            showConfirm('¿Borrar ' + slotName + ' del ' + dl + '?',
+              '<b>' + escapeHtml(sess2.title || 'Sin título') + '</b><br>Los otros turnos de ese día se mantienen. No se puede deshacer.', function() {
+              slotDelBtn.disabled = true;
+              dbDeleteSession(s.date, slotObj.slot).then(function(rows) {
+                if (rows === null) { showToast(sessionDeleteError(), 'error'); render(); return; }
+                dropSessionFromCache(s.date, slotObj.slot);
+                showToast('✓ ' + slotName.charAt(0).toUpperCase() + slotName.slice(1) + (slotObj.slot === 'fis' ? ' borrado' : ' borrada'), 'success');
+                render();
+              });
+            });
+          };
+          const slotBtns = document.createElement('span');
+          slotBtns.style.cssText = 'display:flex;gap:6px;';
+          slotBtns.append(slotEditBtn, slotDelBtn);
+          shRow.append(shLbl, slotBtns);
           body.appendChild(shRow);
         }
         if (sess2.phase === 'Fuerza') {
