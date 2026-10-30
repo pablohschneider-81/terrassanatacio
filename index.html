@@ -1953,6 +1953,32 @@ async function dbSaveSession(date, slot, sessObj) {
   }
   return res; // null si falló, array si guardó
 }
+// Fechas y turnos que va a escribir "Publicar" (mismo cálculo que el bucle de publicación)
+function sessionPublishTargets() {
+  const baseDate = S.sessionDate || todayStr();
+  const out = [];
+  for (let i = 0; i < (S.packDays || 1); i++) {
+    const d2 = new Date(baseDate + 'T12:00:00');
+    d2.setDate(d2.getDate() + i);
+    const ds = d2.getFullYear() + '-' + String(d2.getMonth() + 1).padStart(2, '0') + '-' + String(d2.getDate()).padStart(2, '0');
+    out.push({ date: ds, slot: S.sessionSlot === 'unica' ? 'am' : S.sessionSlot });
+  }
+  return out;
+}
+// Entrenos ya publicados que se reemplazarían. Lee del servidor (no de la caché).
+// Marca con .editing el que se abrió con el lápiz. null = no se pudo comprobar.
+async function sessionPublishConflicts(targets) {
+  const dates = targets.map(function(t) { return t.date; });
+  const rows = await sbFetch('sessions?select=date,slot,title&date=in.(' + dates.join(',') + ')');
+  if (rows === null) return null;
+  const ed = S.editingFrom;
+  return rows.filter(function(r) {
+    return targets.some(function(t) { return t.date === r.date && t.slot === r.slot; });
+  }).map(function(r) {
+    r.editing = !!(ed && ed.date === r.date && ed.slot === r.slot);
+    return r;
+  }).sort(function(a, b) { return a.date < b.date ? -1 : 1; });
+}
 async function dbGetAllSessions(weeks) {
   // Ventana de arranque: solo las últimas N semanas (por defecto 6).
   if (_allSessionsCache) return _allSessionsCache;
@@ -5169,7 +5195,7 @@ function buildCoachSession() {
     showConfirm('¿Borrar sesión?', 'Se perderán todos los campos cargados en el editor.', () => {
       S.sessionTitle=''; S.sessionRPE=6; S.sessionDuration=80; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
       S.alphaPhase=null; S.pullText=''; S.pushText=''; S.lowerText='';
-      S.warmUp=''; S.preSet=''; S.mainSet=''; S.mainSetFondo=''; S.coolDown=''; S.packDays=1;
+      S.warmUp=''; S.preSet=''; S.mainSet=''; S.mainSetFondo=''; S.coolDown=''; S.packDays=1; S.editingFrom=null;
       render();
     });
   };
@@ -5177,7 +5203,7 @@ function buildCoachSession() {
 
   const pubBtn = document.createElement('button');
   pubBtn.className = 'btn btn-primary'; pubBtn.textContent = 'Publicar';
-  pubBtn.onclick = function() {
+  const publishNow = function() {
     // Defensa en profundidad: nunca dejar salir un RPE/duración fuera de rango
     // hacia Supabase (los CHECK constraints de la tabla exigen RPE 1–10 y
     // duración 10–300; si esto falla ahí, llega como 400 sin feedback claro).
@@ -5222,12 +5248,38 @@ function buildCoachSession() {
       // guardado confirmado → limpiar formulario
       S.sessionTitle=''; S.sessionRPE=6; S.sessionDuration=80; S.sessionPhase='Ligero'; S.sessionDate=todayStr();
       S.alphaPhase=null; S.pullText=''; S.pushText=''; S.lowerText='';
-      S.warmUp=''; S.preSet=''; S.mainSet=''; S.mainSetFondo=''; S.coolDown=''; S.packDays=1;
+      S.warmUp=''; S.preSet=''; S.mainSet=''; S.mainSetFondo=''; S.coolDown=''; S.packDays=1; S.editingFrom=null;
       showToast('✓ Sesión publicada', 'success');
       renderAsync();
     }).catch(function() {
       btn.disabled = false; btn.textContent = 'Publicar';
       showToast('⚠ Error de conexión', 'error');
+    });
+  };
+  pubBtn.onclick = function() {
+    const btn = this;
+    if (btn.disabled) return;
+    const targets = sessionPublishTargets();
+    btn.disabled = true; btn.textContent = 'Comprobando…';
+    sessionPublishConflicts(targets).then(function(conf) {
+      btn.disabled = false; btn.textContent = 'Publicar';
+      if (conf === null) { showToast('⚠ No se pudo comprobar si ya hay entrenos. Reintenta', 'error'); return; }
+      if (!conf.length) { publishNow.call(btn); return; }
+      const slotName = { am: 'Mañana', pm: 'Tarde', fis: 'Físico' };
+      const list = conf.map(function(r) {
+        return '<li><b>' + escapeHtml(formatDateLabel(r.date)) + '</b>' + (slotName[r.slot] ? ' · ' + slotName[r.slot] : '') + ': ' + escapeHtml(r.title || 'Sin título') + '</li>';
+      }).join('');
+      const ul = '<ul style="margin:6px 0 8px;padding-left:18px;text-align:left">' + list + '</ul>';
+      // Solo el entreno abierto con el lápiz: es una edición, aviso suave
+      if (conf.length === 1 && conf[0].editing) {
+        showConfirm('¿Guardar los cambios?', ul + 'Se actualizará el entreno publicado.',
+          function() { publishNow.call(btn); }, { okText: 'Guardar cambios', okSafe: true });
+        return;
+      }
+      showConfirm(conf.length > 1 ? 'Ya hay ' + conf.length + ' entrenos publicados' : 'Ya hay un entreno publicado',
+        ul + 'Si publicas, ' + (conf.length > 1 ? 'se reemplazarán' : 'se reemplazará') + ' y no se podrá recuperar.',
+        function() { publishNow.call(btn); },
+        { okText: 'Reemplazar' });
     });
   };
   actions.appendChild(pubBtn);
@@ -7021,6 +7073,7 @@ function buildCoachHistorial() {
       S.mainSetFondo = slotData.mainSetFondo || '';
       S.coolDown = slotData.coolDown || '';
       S.sessionSlot = slotKey; // ← turno real, no forzado a 'am'
+      S.editingFrom = { date: s.date, slot: slotKey }; // reemplazarlo no necesita aviso
       S.packDays = 1;
       S.tab = 0;
       render();
